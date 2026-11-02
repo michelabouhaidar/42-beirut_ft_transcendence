@@ -124,9 +124,10 @@ const DEAD_LINK: Record<Exclude<InvitationState, "PENDING">, { code: string; mes
   DECLINED: { code: "INVITATION_DECLINED", message: "This invitation was declined. Ask for a new one if you changed your mind." },
 };
 
-// Throws 404 for unknown links and 410 for expired, revoked or used ones (INV-04).
+// Throws 410 for unknown links (a resend replaces the token, so older emails point nowhere) and for
+// expired, revoked or used ones (INV-04).
 export function assertInvitationUsable(inv: { status: InvitationStatus; expiresAt: Date; organization: { deletedAt: Date | null } } | null) {
-  if (!inv) throw new InvitationError(404, "INVITATION_NOT_FOUND", "This invitation link isn't valid. Check that you copied the whole link.");
+  if (!inv) throw new InvitationError(410, "INVITATION_NOT_FOUND", "This invitation link isn't valid. Check that you copied the whole link.");
   if (inv.organization.deletedAt) {
     throw new InvitationError(410, "ORG_DELETED", "The organization behind this invitation no longer exists.");
   }
@@ -180,9 +181,9 @@ export async function createSaInvitation(params: {
   return invitation;
 }
 
-// 404 for unknown links, 410 for expired, cancelled or used ones.
+// 410 for unknown links (replaced by a newer invitation) and for expired, cancelled or used ones.
 export function assertSaInvitationUsable(inv: { status: InvitationStatus; expiresAt: Date } | null) {
-  if (!inv) throw new InvitationError(404, "INVITATION_NOT_FOUND", "This invitation link isn't valid. Check that you copied the whole link.");
+  if (!inv) throw new InvitationError(410, "INVITATION_NOT_FOUND", "This invitation link isn't valid. Check that you copied the whole link.");
   const state = invitationState(inv);
   if (state !== "PENDING") {
     const { code, message } = DEAD_LINK[state];
