@@ -18,6 +18,8 @@ import {
   toDate,
   uniqueViolation,
 } from "../services/projects";
+import { notify, projectAudience } from "../services/notifications";
+import { closeProjectRoom, emitToOrg, emitToProject, emitToUser, leaveProjectRoom } from "../realtime/socket";
 
 // Projects and project access (spec §6.7 PRJ-01…05, API §12: /projects, /projects/:key, /projects/:key/access).
 // A System Admin has no org of their own and passes ?orgId= (or orgId in the body) to act on one.
@@ -122,6 +124,8 @@ projectsRouter.post("/projects", async (req: Request, res: Response) => {
         targetDate: toDate(targetDate) ?? null,
       },
     });
+    emitToOrg(orgId, "project:created", { id: project.id, key: project.key });
+    await notify("project.created", { kind: "project", id: project.id, orgId }, auth.user.id, { projectKey: project.key, projectName: project.name });
     const stats = await projectStats([project.id]);
     return res.status(201).json({
       message: `Project ${project.name} (${project.key}) created.`,
@@ -184,6 +188,12 @@ projectsRouter.patch("/projects/:key", async (req: Request, res: Response) => {
         targetDate,
       },
     });
+    emitToOrg(found.orgId, "project:updated", { id: project.id, key: project.key });
+    await notify("project.updated", { kind: "project", id: project.id, orgId: found.orgId }, auth.user.id, {
+      projectKey: updated.key,
+      projectName: updated.name,
+      ...(updated.name !== project.name ? { previousName: project.name } : {}),
+    });
     return res.status(200).json({ message: "Project updated.", project: serializeProject(updated) });
   } catch (err) {
     if (uniqueViolation(err)) {
@@ -204,7 +214,20 @@ projectsRouter.delete("/projects/:key", async (req: Request, res: Response) => {
     return res.status(400).json({ error: { code: "CONFIRMATION_MISMATCH", message: "The typed key doesn't match the project key." } });
   }
   try {
+    // Read before the delete revokes every access row.
+    const audience = await projectAudience(found.project.id, found.orgId);
     await deleteProject(found.project.id, auth.user.id);
+    // Open boards show "This project was deleted" right away (PRJ-05).
+    emitToOrg(found.orgId, "project:deleted", { id: found.project.id, key: found.project.key });
+    emitToProject(found.project.id, "project:deleted", { id: found.project.id, key: found.project.key });
+    closeProjectRoom(found.project.id);
+    await notify(
+      "project.deleted",
+      { kind: "project", id: found.project.id, orgId: found.orgId },
+      auth.user.id,
+      { projectKey: found.project.key, projectName: found.project.name },
+      { audience }
+    );
     return res.status(200).json({ message: `${found.project.name} (${found.project.key}) deleted.` });
   } catch (err) {
     return sendError(res, err, "Failed to delete the project.");
@@ -233,6 +256,12 @@ projectsRouter.post("/projects/:key/access", async (req: Request, res: Response)
   if (typeof userId !== "string" || !UUID_RE.test(userId)) return validationError(res, "Choose a member to give access to.");
   try {
     await grantAccess(found.orgId, found.project.id, userId, auth.user.id);
+    emitToUser(userId, "me:updated", { reason: "access", projectId: found.project.id });
+    emitToOrg(found.orgId, "member:updated", { userId });
+    await notify("project.access_granted", { kind: "project", id: found.project.id, orgId: found.orgId, userId }, auth.user.id, {
+      projectKey: found.project.key,
+      projectName: found.project.name,
+    });
     return res.status(201).json({ message: "Access granted." });
   } catch (err) {
     return sendError(res, err, "Failed to grant access.");
@@ -247,6 +276,16 @@ projectsRouter.delete("/projects/:key/access/:userId", async (req: Request, res:
   if (!UUID_RE.test(req.params.userId)) return notFound(res);
   try {
     const { unassignedTasks } = await revokeAccess(found.project.id, req.params.userId);
+    // PRJ-04: out of the live room; their open board refetches and gets a 404.
+    leaveProjectRoom(req.params.userId, found.project.id);
+    emitToUser(req.params.userId, "me:updated", { reason: "access", projectId: found.project.id });
+    emitToOrg(found.orgId, "member:updated", { userId: req.params.userId });
+    await notify(
+      "project.access_revoked",
+      { kind: "project", id: found.project.id, orgId: found.orgId, userId: req.params.userId },
+      auth.user.id,
+      { projectKey: found.project.key, projectName: found.project.name }
+    );
     return res.status(200).json({ message: "Access revoked.", unassignedTasks });
   } catch (err) {
     return sendError(res, err, "Failed to revoke access.");
