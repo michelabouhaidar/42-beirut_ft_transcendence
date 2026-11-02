@@ -11,7 +11,7 @@ import { formatDate, formatRelative } from "../lib/format";
 export function AdminUserDetailPage({ userId }: { userId: string }) {
   const { navigate } = useApp();
   const [user, setUser] = useState<AdminUserDetail | null>(null);
-  const [error, setError] = useState<{ status?: number; message: string } | null>(null);
+  const [error, setError] = useState<{ code?: string; message: string } | null>(null);
   const [actionRequest, setActionRequest] = useState<UserActionRequest | null>(null);
 
   const load = useCallback(async () => {
@@ -20,8 +20,8 @@ export function AdminUserDetailPage({ userId }: { userId: string }) {
       setUser(res.user);
       setError(null);
     } catch (err) {
-      const e = err as Error & { status?: number };
-      setError({ status: e.status, message: e.message });
+      const e = err as Error & { code?: string };
+      setError({ code: e.code, message: e.message });
     }
   }, [userId]);
 
@@ -30,7 +30,7 @@ export function AdminUserDetailPage({ userId }: { userId: string }) {
     load();
   }, [load]);
 
-  if (error?.status === 404) {
+  if (error?.code === "NOT_FOUND") {
     return (
       <ErrorPage
         code="404"
