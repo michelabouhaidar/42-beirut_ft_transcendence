@@ -1,7 +1,9 @@
 import { InvitationStatus, MembershipStatus, OrgRole } from "@prisma/client";
 import { prisma } from "../app";
-import { endFriendshipsForUser } from "./friends";
+import { emitToOrg, emitToUser, leaveOrgRooms } from "../realtime/socket";
+import { emitFriendshipChange, endFriendshipsForUser } from "./friends";
 import { sendMemberRemovedEmail, sendOrgDeletedEmail, sendRoleChangedEmail } from "./mailer";
+import { notify } from "./notifications";
 
 export class OrgError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -32,6 +34,11 @@ export async function updateOrganization(orgId: string, actorId: string, data: {
     const updated = await prisma.organization.update({
       where: { id: org.id },
       data: { name: data.name, description: data.description || null },
+    });
+    emitToOrg(org.id, "org:updated", { id: org.id });
+    await notify("org.updated", { kind: "organization", id: org.id }, actorId, {
+      orgName: updated.name,
+      ...(updated.name !== org.name ? { previousName: org.name } : {}),
     });
     return updated;
   } catch (err: any) {
@@ -104,6 +111,11 @@ export async function deleteOrganization(orgId: string, actorId: string, confirm
     await tx.organization.update({ where: { id: org.id }, data: { deletedAt: now, deletedById: actorId } });
   });
 
+  emitToOrg(org.id, "org:deleted", { id: org.id });
+  for (const id of memberIds) emitToUser(id, "me:updated", { reason: "org_deleted" });
+  await leaveOrgRooms(memberIds, org.id);
+  await notify("org.deleted", { kind: "organization", id: org.id }, actorId, { orgName: org.name }, { audience: memberIds });
+
   await Promise.all(
     org.memberships.map((m) =>
       sendOrgDeletedEmail(m.user.email, m.user.firstName, org.name).catch((err) =>
@@ -122,6 +134,22 @@ async function activeMembership(orgId: string, userId: string) {
   });
   if (!m) throw new OrgError(404, "NOT_FOUND", "That person isn't a member of this organization.");
   return m;
+}
+
+// §6.9 Membership: the person concerned and the org's admins. The member's name is kept in the params
+// because the actor (an admin) isn't the person the notification is about.
+export async function notifyMembership(
+  type: "membership.role_changed" | "membership.removed" | "membership.left",
+  m: { id: string; orgId: string; userId: string; user: { firstName: string; lastName: string }; organization: { name: string } },
+  actorId: string,
+  params: Record<string, string>
+) {
+  await notify(type, { kind: "membership", id: m.id, orgId: m.orgId, userId: m.userId }, actorId, {
+    ...params,
+    orgName: m.organization.name,
+    memberId: m.userId,
+    memberName: `${m.user.firstName} ${m.user.lastName}`,
+  });
 }
 
 async function activeOrgAdminCount(orgId: string) {
@@ -154,6 +182,9 @@ export async function changeMemberRole(orgId: string, userId: string, role: "MEM
     }
   });
 
+  emitToUser(userId, "me:updated", { reason: "role" });
+  emitToOrg(orgId, "member:updated", { userId });
+  await notifyMembership("membership.role_changed", m, actorId, { from: m.role, role });
   await sendRoleChangedEmail(m.user.email, m.user.firstName, `Organization role changed to ${role}`).catch((err) =>
     console.warn("[Orgs] Could not send role change email:", err)
   );
@@ -176,6 +207,7 @@ export async function endMembership(orgId: string, userId: string, how: "removed
 
   const now = new Date();
   let unassignedTasks = 0;
+  let exFriends: string[] = [];
   await prisma.$transaction(async (tx) => {
     await tx.membership.update({ where: { id: m.id }, data: { status: MembershipStatus.REMOVED, leftAt: now } });
     await tx.projectAccess.updateMany({
@@ -187,9 +219,14 @@ export async function endMembership(orgId: string, userId: string, how: "removed
       data: { assigneeId: null },
     });
     unassignedTasks = r.count;
-    await endFriendshipsForUser(tx, userId);
+    exFriends = await endFriendshipsForUser(tx, userId);
   });
 
+  if (exFriends.length) emitFriendshipChange([userId, ...exFriends], { reason: how });
+  emitToUser(userId, "me:updated", { reason: how });
+  await leaveOrgRooms([userId], orgId);
+  emitToOrg(orgId, "member:updated", { userId });
+  await notifyMembership(how === "removed" ? "membership.removed" : "membership.left", m, actorId, { role: m.role });
   if (how === "removed") {
     await sendMemberRemovedEmail(m.user.email, m.user.firstName, m.organization.name).catch((err) =>
       console.warn("[Orgs] Could not send removal email:", err)
