@@ -40,7 +40,7 @@ const validationError = (res: Response, message: string) => res.status(400).json
 // Anything out of scope is a 404, never a 403 (§4.1). With `manage`, only OA/SA pass.
 export async function loadProject(req: Request, res: Response, auth: AuthContext, manage: boolean) {
   const key = String(req.params.key || "").toUpperCase();
-  const orgId = await resolveOrgScope(auth, req.query.orgId ?? req.body?.orgId);
+  const orgId = manage ? await resolveOrgScope(auth, req.query.orgId ?? req.body?.orgId) : auth.organization?.id;
   if (!orgId || !PROJECT_KEY_RE.test(key)) {
     notFound(res);
     return null;

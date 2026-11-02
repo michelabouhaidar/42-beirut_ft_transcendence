@@ -61,17 +61,17 @@ Rules:
 | Change role Member ↔ Viewer, remove Member/Viewer | ✓ | org | ✗ | ✗ | ✗ |
 | Leave the org | - | ✓ (not last OA) | ✓ | ✓ | - |
 | Create / edit / delete project, grant/revoke access | ✓ | org | ✗ | ✗ | ✗ |
-| View project, board, tasks, comments; search | ✓ | org | proj | proj | ✗ |
-| Create / edit / move / assign task | ✓ | org | proj | ✗ | ✗ |
-| Delete task | ✓ | org | own | ✗ | ✗ |
-| Add comment / edit own comment | ✓ | org | proj | proj | ✗ |
-| Delete comment | ✓ | org | own | own | ✗ |
+| View project, board, tasks, comments; search | ✗ | org | proj | proj | ✗ |
+| Create / edit / move / assign task | ✗ | org | proj | ✗ | ✗ |
+| Delete task | ✗ | org | own | ✗ | ✗ |
+| Add comment / edit own comment | ✗ | org | proj | proj | ✗ |
+| Delete comment | ✗ | org | own | own | ✗ |
 
 ### 4.3 Different views per role (*Advanced permissions*)
 
 | Role | UI |
 |---|---|
-| SA | **Admin** menu: Users, Organizations. Can open any org. |
+| SA | **Admin** menu: Users, Organizations. Can open any org and manage its projects, but never sees its tasks or comments (data confidentiality). |
 | OA | **Organization** menu: Members, Invitations, Settings. "New project", project settings and access. |
 | M | Task create/edit, drag and drop. No org admin menu. |
 | V | Same pages as M in **read-only** mode (no create/edit/drag, "Read-only" badge). |
@@ -177,8 +177,8 @@ Rules:
 | **TSK-07** | Live updates. | Create, edit, move, assign, delete and comments appear on other open boards/panels within 2 s without reload. The board joins `project:<id>` (`project:join`, access checked) and refetches when a `task:*`, `comment:*`, `member:updated` or `me:updated` event arrives (batched per 100 ms). A `task:updated` whose `version` the client already has is ignored; a typed-but-unsaved panel draft is kept. |
 | **TSK-08** | List view. | Sortable table of the project's tasks. `/projects/:key/list`: sort by key, title, status, priority, assignee, due, updated. |
 | **TSK-09** | Detail panel. | Opened from the board or by URL `/projects/:key/tasks/:n`. All fields, creator, dates, comments. Read-only for Viewers. Viewers see fields read-only but can comment (TSK-11). |
-| **TSK-10** | Delete a task. | OA/SA, or the Member who created it. Confirmation. Soft delete with its comments. `DELETE /projects/:key/tasks/:n`. |
-| **TSK-11** | Comments. | OA, Members **and Viewers** with access: add (1–5,000 chars), edit own ("edited"), delete own (OA/SA: any). Deleted comments show "This comment was deleted". Live for other viewers. `GET/POST /projects/:key/tasks/:n/comments`, `PATCH/DELETE /comments/:id`. |
+| **TSK-10** | Delete a task. | OA, or the Member who created it. Confirmation. Soft delete with its comments. `DELETE /projects/:key/tasks/:n`. |
+| **TSK-11** | Comments. | OA, Members **and Viewers** with access: add (1–5,000 chars), edit own ("edited"), delete own (OA: any). Deleted comments show "This comment was deleted". Live for other viewers. `GET/POST /projects/:key/tasks/:n/comments`, `PATCH/DELETE /comments/:id`. |
 
 ### 6.9 Notifications (NOTIF) - *Minor: complete notification system*
 
@@ -232,7 +232,7 @@ Rules:
 
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
-| **SRCH-01** | Scope-aware search. | Text matching (case-insensitive, partial) across task key, title, and description backed by `pg_trgm` GIN index. Never returns tasks outside user's authorized scope. Header search bar routes directly to `/search?q=`. `GET /search/tasks?q=` performs scoped matching; OA/SA search the whole org; Members/Viewers search only projects with access. |
+| **SRCH-01** | Scope-aware search. | Text matching (case-insensitive, partial) across task key, title, and description backed by `pg_trgm` GIN index. Never returns tasks outside user's authorized scope. Header search bar routes directly to `/search?q=`. `GET /search/tasks?q=` performs scoped matching; OA search the whole org; Members/Viewers search only projects with access. |
 | **SRCH-02** | Multi-attribute filters. | Filter by project, status, priority, assignee (`me`, `unassigned`, or user ID), and due date range (`dueFrom`, `dueTo`). Removable filter chips + "Clear all". Parameters accept comma-separated multi-values; invalid parameters return 400. Response provides available projects and assignees for quick filtering. |
 | **SRCH-03** | Sorting options. | Sort by updated date (default), created date, due date (empty dates placed last), priority, or title; direction `asc` or `desc`. Defaults: newest updated first, soonest due first, highest priority first, alphabetical title A→Z. |
 | **SRCH-04** | Pagination & URL sync. | 25 results per page with range indicator (e.g., "26–50 of 132"). Search query, applied filters, sort field, direction, and page number synchronize with URL query parameters for shareable URLs and functional browser history. |

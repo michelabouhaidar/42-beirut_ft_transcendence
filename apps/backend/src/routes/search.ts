@@ -3,7 +3,7 @@ import { MembershipStatus, OrgRole, Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../app";
 import { requireAuth } from "../services/auth";
-import { canManageProjects, resolveOrgScope } from "../services/projects";
+import { canManageProjects } from "../services/projects";
 import { serializeTask, taskInclude } from "../services/tasks";
 import { withFriendsFirst } from "../services/friends";
 
@@ -41,7 +41,6 @@ const SearchQuerySchema = z
     sort: z.enum(["updated", "created", "due", "priority", "title"]).optional().default("updated"),
     dir: z.enum(["asc", "desc"]).optional(),
     page: z.coerce.number().int().min(1).max(100000).optional().default(1),
-    orgId: z.string().optional(),
   })
   .strict()
   .refine((d) => !d.dueFrom || !d.dueTo || d.dueFrom <= d.dueTo, { message: "The due date range is reversed" });
@@ -51,7 +50,7 @@ const DEFAULT_DIR = { updated: "desc", created: "desc", due: "asc", priority: "d
 
 const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
-// SRCH-01: never returns tasks outside the user's scope. OA (and SA with ?orgId) search the whole org;
+// SRCH-01: never returns tasks outside the user's scope. OA search the whole org;
 // Members and Viewers only projects they have access to.
 searchRouter.get("/search/tasks", async (req: Request, res: Response) => {
   const auth = await requireAuth(req, res);
@@ -61,7 +60,7 @@ searchRouter.get("/search/tasks", async (req: Request, res: Response) => {
     return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: parsed.error.errors[0]?.message || "Invalid search." } });
   }
   const f = parsed.data;
-  const orgId = await resolveOrgScope(auth, f.orgId);
+  const orgId = auth.organization?.id;
   if (!orgId) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Organization not found." } });
 
   try {

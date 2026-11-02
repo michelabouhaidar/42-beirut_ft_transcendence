@@ -49,12 +49,12 @@ export function serializeTask(t: TaskRow, projectKey: string) {
   };
 }
 
-// OA, SA and Members with access work on tasks; Viewers only read (§4.3).
+// OA and Members with access work on tasks; Viewers only read (§4.3).
 export const canEditTasks = (auth: AuthContext) => auth.role !== "VIEWER";
 
-// TSK-10: OA/SA, or the Member who created the task.
+// TSK-10: OA, or the Member who created the task.
 export const canDeleteTask = (auth: AuthContext, creatorId: string) =>
-  auth.role === "SA" || auth.role === "OA" || (auth.role === "MEMBER" && creatorId === auth.user.id);
+  auth.role === "OA" || (auth.role === "MEMBER" && creatorId === auth.user.id);
 
 export async function findTask(projectId: string, number: number) {
   if (!Number.isInteger(number) || number < 1) throw new TaskError(404, "NOT_FOUND", "Task not found.");
@@ -344,5 +344,5 @@ export const commentInclude = { author: userCard } as const;
 
 // OA, Members and Viewers with access can comment (TSK-11 as amended); the project check happens first.
 export function canDeleteComment(auth: AuthContext, authorId: string) {
-  return auth.role === "SA" || auth.role === "OA" || authorId === auth.user.id;
+  return auth.role === "OA" || authorId === auth.user.id;
 }

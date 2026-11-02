@@ -4,7 +4,7 @@ import { FriendshipStatus } from "@prisma/client";
 import { prisma } from "../app";
 import { activeWebSocketConnections } from "../services/metrics";
 import { SESSION_COOKIE_NAME, getAuthContextFromCookieHeader, hashToken, parseCookieHeader } from "../services/auth";
-import { findProject, hasProjectAccess, resolveOrgScope } from "../services/projects";
+import { findProject, hasProjectAccess } from "../services/projects";
 
 // Real-time engine (spec §6.13, rooms and events §12.3).
 //   user:<id>     notifications, me:updated, session:revoked, presence of friends
@@ -108,7 +108,7 @@ export function initSocketServer(server: HttpServer): Server {
 
     // RT-03: a board joins its project room; same checks as GET /projects/:key (§7.7), with the
     // session's current role. One project room per socket (a tab shows one board).
-    socket.on("project:join", async (data: { key?: unknown; orgId?: unknown } | undefined, ack?: (r: unknown) => void) => {
+    socket.on("project:join", async (data: { key?: unknown } | undefined, ack?: (r: unknown) => void) => {
       const reply = typeof ack === "function" ? ack : () => {};
       try {
         const auth = await getAuthContextFromCookieHeader(socket.handshake.headers.cookie);
@@ -117,7 +117,7 @@ export function initSocketServer(server: HttpServer): Server {
           socket.disconnect(true);
           return;
         }
-        const orgId = await resolveOrgScope(auth, data?.orgId);
+        const orgId = auth.organization?.id;
         const key = String(data?.key ?? "").toUpperCase();
         const project = orgId ? await findProject(orgId, key).catch(() => null) : null;
         if (!project || !(await hasProjectAccess(auth, project.id))) return reply({ ok: false, code: "NOT_FOUND" });

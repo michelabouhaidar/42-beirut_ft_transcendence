@@ -25,7 +25,7 @@ import {
 import { loadProject } from "./projects";
 
 // Tasks, board and comments (spec §6.8 TSK-01…11, API §12). Every route runs the project check first:
-// authenticated → org scope → project access → role (§7.7). A System Admin adds ?orgId=.
+// authenticated → org scope → project access → role (§7.7).
 export const tasksRouter = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -92,7 +92,7 @@ tasksRouter.post("/projects/:key/tasks", async (req: Request, res: Response) => 
   const found = await loadProject(req, res, auth, false);
   if (!found) return;
   if (!canEditTasks(auth)) return forbidden(res, "Viewers can't create tasks.");
-  const { orgId: _orgId, ...body } = req.body ?? {};
+  const body = req.body ?? {};
   const parsed = CreateTaskSchema.safeParse(body);
   if (!parsed.success) return validationError(res, parsed.error.errors[0]?.message || "Invalid task.");
   try {
@@ -127,7 +127,7 @@ tasksRouter.patch("/projects/:key/tasks/:n", async (req: Request, res: Response)
   const found = await loadTask(req, res, auth);
   if (!found) return;
   if (!canEditTasks(auth)) return forbidden(res, "Viewers can't edit tasks.");
-  const { orgId: _orgId, ...body } = req.body ?? {};
+  const body = req.body ?? {};
   const parsed = UpdateTaskSchema.safeParse(body);
   if (!parsed.success) return validationError(res, parsed.error.errors[0]?.message || "Invalid task.");
   const { version, ...fields } = parsed.data;
@@ -152,7 +152,7 @@ tasksRouter.post("/projects/:key/tasks/:n/move", async (req: Request, res: Respo
   const found = await loadTask(req, res, auth);
   if (!found) return;
   if (!canEditTasks(auth)) return forbidden(res, "Viewers can't move tasks.");
-  const { orgId: _orgId, ...body } = req.body ?? {};
+  const body = req.body ?? {};
   const parsed = MoveTaskSchema.safeParse(body);
   if (!parsed.success) return validationError(res, parsed.error.errors[0]?.message || "Invalid move.");
   try {
@@ -209,7 +209,7 @@ tasksRouter.post("/projects/:key/tasks/:n/comments", async (req: Request, res: R
   if (!auth) return;
   const found = await loadTask(req, res, auth);
   if (!found) return;
-  const { orgId: _orgId, ...body } = req.body ?? {};
+  const body = req.body ?? {};
   const parsed = CommentSchema.safeParse(body);
   if (!parsed.success) return validationError(res, parsed.error.errors[0]?.message || "Invalid comment.");
   try {
@@ -243,7 +243,7 @@ async function loadComment(req: Request, res: Response, auth: AuthContext) {
     },
   });
   const project = comment?.task.project;
-  const inScope = project && (auth.role === "SA" || auth.organization?.id === project.orgId) && (await hasProjectAccess(auth, project.id));
+  const inScope = project && auth.organization?.id === project.orgId && (await hasProjectAccess(auth, project.id));
   if (!comment || !inScope) {
     res.status(404).json({ error: { code: "NOT_FOUND", message: "Comment not found." } });
     return null;
