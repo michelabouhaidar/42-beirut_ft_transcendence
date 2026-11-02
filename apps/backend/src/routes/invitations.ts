@@ -18,7 +18,9 @@ import {
   assertInvitationUsable,
   assertSaInvitationUsable,
   InvitationError,
+  notifyInvitation,
 } from "../services/invitations";
+import { emitToOrg } from "../realtime/socket";
 
 // Invitations (spec §6.3 INV-01…04, API §12).
 export const invitationsRouter = Router();
@@ -144,6 +146,8 @@ invitationsRouter.post("/invitations/:id/revoke", async (req: Request, res: Resp
       throw new InvitationError(409, "NOT_PENDING", `This invitation was already ${inv.status.toLowerCase()}.`);
     }
     await prisma.invitation.update({ where: { id: inv.id }, data: { status: InvitationStatus.REVOKED } });
+    const org = await prisma.organization.findUnique({ where: { id: inv.orgId }, select: { name: true } });
+    await notifyInvitation("invitation.revoked", inv, org?.name ?? "", auth.user.id);
     return res.status(200).json({ message: `Invitation for ${inv.email} revoked. The link no longer works.` });
   } catch (err) {
     return sendError(res, err, "Failed to revoke invitation.");
@@ -345,6 +349,9 @@ invitationsRouter.post("/invitations/by-token/:token/accept", async (req: Reques
       return created;
     });
 
+    await notifyInvitation("invitation.accepted", inv!, inv!.organization.name, user.id);
+    // A brand-new account has no socket yet; it joins the org room when it connects.
+    emitToOrg(inv!.orgId, "member:updated", { userId: user.id });
     setSessionCookie(res, await createSession(user.id, false));
     return res.status(201).json({
       message: `Welcome to ${inv!.organization.name}.`,
