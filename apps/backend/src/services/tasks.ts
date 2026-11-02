@@ -4,6 +4,8 @@ import { AuthContext } from "./auth";
 import { withFriendsFirst } from "./friends";
 import { OrgError as TaskError } from "./orgs";
 import { fromDate, toDate } from "./projects";
+import { notify } from "./notifications";
+import { emitToProject } from "../realtime/socket";
 
 export { TaskError };
 
@@ -133,6 +135,13 @@ async function positionAt(tx: Tx, projectId: string, status: TaskStatus, index: 
   return POSITION_STEP;
 }
 
+// What every task notification carries (§6.9): enough to word it and link it without a join.
+function taskParams(t: { number: number; title: string }, projectKey: string) {
+  return { projectKey, number: t.number, title: t.title };
+}
+
+const fullName = (u: UserCard | null) => (u ? `${u.firstName} ${u.lastName}` : null);
+
 export interface TaskInput {
   title?: string;
   description?: string | null;
@@ -171,6 +180,12 @@ export async function createTask(
       include: taskInclude,
     });
     return task;
+  });
+  emitTaskEvent(project.id, "task:created", task);
+  await notify("task.created", { kind: "task", id: task.id, projectId: project.id, creatorId: actorId, assigneeId: task.assigneeId }, actorId, {
+    ...taskParams(task, project.key),
+    assigneeId: task.assigneeId,
+    assigneeName: fullName(task.assignee),
   });
   return task;
 }
@@ -215,7 +230,44 @@ export async function updateTask(
     return tx.task.findUniqueOrThrow({ where: { id: task.id }, include: taskInclude });
   });
   if (!updated) return conflict(task.id, project.key);
+  emitTaskEvent(project.id, "task:updated", updated);
+  await notifyTaskChanges(project, task, updated, actorId);
   return updated;
+}
+
+// TSK-03/04 (§6.9): a new assignee is its own notification; other edits are "moved" when only the
+// column changed, "edited" otherwise. Saving without a real change tells nobody.
+async function notifyTaskChanges(project: { id: string; key: string }, before: TaskRow, after: TaskRow, actorId: string) {
+  const resource = { kind: "task" as const, id: after.id, projectId: project.id, creatorId: after.creatorId, assigneeId: after.assigneeId };
+  const params = taskParams(after, project.key);
+
+  if (before.assigneeId !== after.assigneeId) {
+    await notify("task.assigned", { ...resource, previousAssigneeId: before.assigneeId }, actorId, {
+      ...params,
+      assigneeId: after.assigneeId,
+      assigneeName: fullName(after.assignee),
+      previousAssigneeId: before.assigneeId,
+      previousAssigneeName: fullName(before.assignee),
+    });
+  }
+
+  const fields = (
+    [
+      ["title", before.title !== after.title],
+      ["description", before.description !== after.description],
+      ["status", before.status !== after.status],
+      ["priority", before.priority !== after.priority],
+      ["dueDate", fromDate(before.dueDate) !== fromDate(after.dueDate)],
+    ] as const
+  )
+    .filter(([, changed]) => changed)
+    .map(([field]) => field);
+  if (!fields.length) return;
+  if (fields.length === 1 && fields[0] === "status") {
+    await notify("task.moved", resource, actorId, { ...params, from: before.status, status: after.status });
+  } else {
+    await notify("task.updated", resource, actorId, { ...params, fields: [...fields] });
+  }
 }
 
 // TSK-06: drag and drop or "Move to…": new column and place, version-checked.
@@ -237,6 +289,9 @@ export async function moveTask(
     return tx.task.findUniqueOrThrow({ where: { id: task.id }, include: taskInclude });
   });
   if (!updated) return conflict(task.id, project.key);
+  emitTaskEvent(project.id, "task:updated", updated);
+  // Reordering inside a column isn't news; changing column is (§6.9 "moved").
+  if (task.status !== status) await notifyTaskChanges(project, task, updated, actorId);
   return updated;
 }
 
@@ -247,6 +302,19 @@ export async function deleteTask(project: { id: string; key: string }, task: Tas
     await tx.comment.updateMany({ where: { taskId: task.id, deletedAt: null }, data: { deletedAt: now, deletedById: actorId } });
     await tx.task.update({ where: { id: task.id }, data: { deletedAt: now, deletedById: actorId } });
   });
+  emitTaskEvent(project.id, "task:deleted", { ...task, version: task.version + 1 });
+  await notify(
+    "task.deleted",
+    { kind: "task", id: task.id, projectId: project.id, creatorId: task.creatorId, assigneeId: task.assigneeId },
+    actorId,
+    taskParams(task, project.key)
+  );
+}
+
+// TSK-07 / RT-02: everyone with the board open hears about a change. Events carry the version
+// so a client that already has a newer copy ignores a late one (§7.2).
+export function emitTaskEvent(projectId: string, event: "task:created" | "task:updated" | "task:deleted", t: { id: string; number: number; version: number }) {
+  emitToProject(projectId, event, { id: t.id, number: t.number, version: t.version });
 }
 
 // --- Comments (TSK-11) ----------------------------------------------------------------------------
