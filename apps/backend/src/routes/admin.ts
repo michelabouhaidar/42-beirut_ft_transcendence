@@ -8,10 +8,12 @@ import {
   sendInvitationEmail,
 } from "../services/mailer";
 import { CreateOrgSchema } from "../schemas";
-import { createOrgInvitation, createSaInvitation, InvitationError } from "../services/invitations";
+import { createOrgInvitation, createSaInvitation, InvitationError, notifyInvitation } from "../services/invitations";
 import { getAuthContextFromRequest, generateSecureToken } from "../services/auth";
-import { endFriendshipsForUser } from "../services/friends";
-import { OrgError, deleteOrganization, findActiveOrgByName, updateOrganization } from "../services/orgs";
+import { disconnectUserSockets, emitToOrg, emitToUser, leaveOrgRooms } from "../realtime/socket";
+import { emitFriendshipChange, endFriendshipsForUser } from "../services/friends";
+import { OrgError, deleteOrganization, findActiveOrgByName, notifyMembership, updateOrganization } from "../services/orgs";
+import { notify } from "../services/notifications";
 import { deleteAvatarFile } from "../services/avatars";
 import { AccountStatus, OrgRole, MembershipStatus, InvitationRole, InvitationStatus } from "@prisma/client";
 
@@ -443,6 +445,7 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
 
     // 2. Apply in one transaction.
     let unassignedTasks = 0;
+    let exFriends: string[] = [];
     await prisma.$transaction(async (tx) => {
       await tx.user.update({ where: { id: targetId }, data: updates });
 
@@ -455,7 +458,7 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
           where: { userId: targetId, revokedAt: null, project: { orgId: membership.orgId } },
           data: { revokedAt: new Date() },
         });
-        await endFriendshipsForUser(tx, targetId);
+        exFriends = await endFriendshipsForUser(tx, targetId);
         const r = await tx.task.updateMany({
           where: { assigneeId: targetId, project: { orgId: membership.orgId } },
           data: { assigneeId: null },
@@ -476,6 +479,35 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
       }
     });
 
+    if (updates.isSystemAdmin !== undefined || nextRole) {
+      emitToUser(targetId, "me:updated", { reason: "role" });
+    }
+    if (exFriends.length) emitFriendshipChange([targetId, ...exFriends], { reason: "system_admin" });
+    if (membership && (nextRole || updates.isSystemAdmin === true)) {
+      // Granting SA ends the membership (§4.1): out of the org's live rooms.
+      if (updates.isSystemAdmin === true) await leaveOrgRooms([targetId], membership.orgId);
+      emitToOrg(membership.orgId, "member:updated", { userId: targetId });
+    }
+
+    // §6.9 Account: edited or role changed by an SA → the user; an org role change also tells the org's admins.
+    const profileFields = ["firstName", "lastName", "jobTitle", "bio"].filter((f) => f in updates);
+    if (profileFields.length) {
+      await notify("account.updated", { kind: "user", id: targetId }, auth.user.id, { fields: profileFields });
+    }
+    if (typeof updates.isSystemAdmin === "boolean") {
+      await notify("account.role_changed", { kind: "user", id: targetId }, auth.user.id, { systemAdmin: updates.isSystemAdmin });
+    }
+    if (membership && (nextRole || updates.isSystemAdmin === true)) {
+      const org = await prisma.organization.findUnique({ where: { id: membership.orgId }, select: { name: true } });
+      const m = {
+        ...membership,
+        user: { firstName: String(updates.firstName ?? targetUser.firstName), lastName: String(updates.lastName ?? targetUser.lastName) },
+        organization: { name: org?.name ?? "" },
+      };
+      if (nextRole) await notifyMembership("membership.role_changed", m, auth.user.id, { from: membership.role, role: nextRole });
+      else await notifyMembership("membership.removed", m, auth.user.id, { role: membership.role });
+    }
+
     try {
       await sendRoleChangedEmail(targetUser.email, targetUser.firstName, changes.join(", "));
     } catch (mailErr) {
@@ -493,7 +525,7 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
 
 // =========================================================================
 // ADM-05: Suspend / reactivate
-// Sessions revoked immediately; email to the user.
+// Sessions revoked and sockets closed immediately; email to the user.
 // Not on self or last SA.
 // =========================================================================
 adminRouter.post("/users/:id/suspend", async (req: Request, res: Response) => {
@@ -582,6 +614,12 @@ adminRouter.post("/users/:id/suspend", async (req: Request, res: Response) => {
       data: { revokedAt: new Date() },
     });
 
+    // Close real-time sockets immediately (ADM-05)
+    await disconnectUserSockets(targetId, { reason: "Your account was suspended." });
+    for (const m of targetUser.memberships) emitToOrg(m.orgId, "member:updated", { userId: targetId });
+    // Waits in their inbox until they're reactivated.
+    await notify("account.suspended", { kind: "user", id: targetId }, auth.user.id);
+
     // Send notification email to the user
     try {
       await sendAccountSuspendedEmail(targetUser.email, targetUser.firstName, reason);
@@ -637,6 +675,8 @@ adminRouter.post("/users/:id/reactivate", async (req: Request, res: Response) =>
         lockedUntil: null,
       },
     });
+
+    await notify("account.reactivated", { kind: "user", id: targetId }, auth.user.id);
 
     try {
       await sendAccountReactivatedEmail(targetUser.email, targetUser.firstName);
@@ -746,6 +786,7 @@ adminRouter.delete("/users/:id", async (req: Request, res: Response) => {
 
     // 5. Anonymize in one transaction (§7.1).
     const now = new Date();
+    let exFriends: string[] = [];
     await prisma.$transaction(async (tx) => {
       await tx.session.updateMany({ where: { userId: targetId, revokedAt: null }, data: { revokedAt: now } });
       await tx.twoFactor.deleteMany({ where: { userId: targetId } });
@@ -755,7 +796,7 @@ adminRouter.delete("/users/:id", async (req: Request, res: Response) => {
         data: { status: MembershipStatus.REMOVED, leftAt: now },
       });
       await tx.projectAccess.updateMany({ where: { userId: targetId, revokedAt: null }, data: { revokedAt: now } });
-      await endFriendshipsForUser(tx, targetId);
+      exFriends = await endFriendshipsForUser(tx, targetId);
       await tx.task.updateMany({ where: { assigneeId: targetId }, data: { assigneeId: null } });
       await tx.user.update({
         where: { id: targetId },
@@ -773,6 +814,9 @@ adminRouter.delete("/users/:id", async (req: Request, res: Response) => {
         },
       });
     });
+    await disconnectUserSockets(targetId, { reason: "Your account was deleted." });
+    emitFriendshipChange(exFriends, { reason: "deleted" });
+    for (const m of targetUser.memberships) emitToOrg(m.orgId, "member:updated", { userId: targetId });
     await deleteAvatarFile(targetUser.avatarPath);
 
     return res.status(200).json({
@@ -911,7 +955,7 @@ adminRouter.post("/orgs", async (req: Request, res: Response) => {
     }
 
     const { raw: rawToken, hash: tokenHash } = generateSecureToken();
-    const { org } = await prisma.$transaction(async (tx) => {
+    const { org, firstOaInvitation } = await prisma.$transaction(async (tx) => {
       const created = await tx.organization.create({
         data: { name, description: description || null, createdById: auth.user.id },
       });
@@ -940,6 +984,7 @@ adminRouter.post("/orgs", async (req: Request, res: Response) => {
         console.warn("[Admin] Could not send first-OA invitation email:", mailErr);
       }
     }
+    if (firstOaInvitation) await notifyInvitation("invitation.received", firstOaInvitation, org.name, auth.user.id);
 
     return res.status(201).json({
       message: firstOaEmail
