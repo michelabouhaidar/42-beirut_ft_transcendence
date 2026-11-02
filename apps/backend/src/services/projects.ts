@@ -35,7 +35,7 @@ export async function findProject(orgId: string, key: string) {
   const project = await prisma.project.findFirst({ where: { orgId, key, deletedAt: null } });
   if (project) return project;
   const deleted = await prisma.project.findFirst({ where: { orgId, key, deletedAt: { not: null } }, select: { id: true } });
-  if (deleted) throw new OrgError(404, "PROJECT_DELETED", "This project was deleted.");
+  if (deleted) throw new OrgError(410, "PROJECT_DELETED", "This project was deleted.");
   throw new OrgError(404, "NOT_FOUND", "Project not found.");
 }
 
