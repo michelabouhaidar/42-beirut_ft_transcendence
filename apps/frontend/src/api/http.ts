@@ -20,7 +20,8 @@ async function request<T>(method: string, url: string, { body, signal }: Options
   });
   const data = await res.json().catch(() => ({}));
   if (res.status === 401) notifySessionExpired();
-  if (!res.ok) {
+  // A refusal (wrong password, name taken, link used…) arrives as 200 with ok:false; pages handle it like an error.
+  if (!res.ok || data?.ok === false) {
 	const err = new Error(data?.error?.message || data?.message || `Request failed with status ${res.status}`) as ApiError;
     err.code = data?.error?.code;
     err.status = res.status;
