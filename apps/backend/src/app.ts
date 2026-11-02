@@ -12,6 +12,8 @@ import { usersRouter } from "./routes/users";
 import { orgsRouter } from "./routes/orgs";
 import { projectsRouter } from "./routes/projects";
 import { tasksRouter } from "./routes/tasks";
+import { searchRouter } from "./routes/search";
+import { notificationsRouter } from "./routes/notifications";
 
 export const prisma = new PrismaClient();
 
@@ -72,7 +74,7 @@ export function createApp(): express.Express {
   });
 
   // CORS configuration: the only origin is the HTTPS front door (nginx on 8443)
-  const allowedOrigin = process.env.APP_URL || "https://localhost:8443";
+  const allowedOrigin = process.env.APP_URL;
   app.use(
     cors({
       origin: allowedOrigin,
@@ -98,6 +100,8 @@ export function createApp(): express.Express {
   app.use("/api/v1", orgsRouter);
   app.use("/api/v1", projectsRouter);
   app.use("/api/v1", tasksRouter);
+  app.use("/api/v1", searchRouter);
+  app.use("/api/v1", notificationsRouter);
 
   // Health check endpoint conforming to NFR-30
   app.get("/api/v1/health", async (_req: Request, res: Response) => {
