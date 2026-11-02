@@ -2,6 +2,7 @@ import { Invitation, InvitationRole, InvitationStatus, MembershipStatus } from "
 import { prisma } from "../app";
 import { generateSecureToken } from "./auth";
 import { sendInvitationEmail, sendSaInvitationEmail } from "./mailer";
+import { notify } from "./notifications";
 
 export const INVITATION_TTL_DAYS = 7;
 
@@ -72,6 +73,7 @@ export async function createOrgInvitation(params: {
   await sendInvitationEmail(email, org.name, `${params.inviter.firstName} ${params.inviter.lastName}`, raw).catch((err) =>
     console.warn("[Invitations] Could not send invitation email:", err)
   );
+  await notifyInvitation("invitation.received", invitation, org.name, params.inviter.id);
 
   return invitation;
 }
@@ -94,7 +96,25 @@ export async function resendInvitation(invitationId: string, inviter: { id: stri
   await sendInvitationEmail(inv.email, inv.organization.name, `${inviter.firstName} ${inviter.lastName}`, raw).catch((err) =>
     console.warn("[Invitations] Could not resend invitation email:", err)
   );
+  await notifyInvitation("invitation.received", updated, inv.organization.name, inviter.id, { resent: true });
   return updated;
+}
+
+// §6.9 Invitation: created/resent/revoked → the invitee if they have an account; accepted/declined →
+// the inviter and the org's admins.
+export async function notifyInvitation(
+  type: "invitation.received" | "invitation.revoked" | "invitation.accepted" | "invitation.declined",
+  inv: { id: string; orgId: string; email: string; role: InvitationRole; invitedById: string },
+  orgName: string,
+  actorId: string,
+  extra: Record<string, boolean> = {}
+) {
+  await notify(
+    type,
+    { kind: "invitation", id: inv.id, orgId: inv.orgId, email: inv.email, invitedById: inv.invitedById },
+    actorId,
+    { orgName, role: inv.role, email: inv.email, ...extra }
+  );
 }
 
 const DEAD_LINK: Record<Exclude<InvitationState, "PENDING">, { code: string; message: string }> = {
