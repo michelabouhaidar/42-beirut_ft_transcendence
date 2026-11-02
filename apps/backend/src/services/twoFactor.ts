@@ -2,7 +2,8 @@ import crypto from "crypto";
 import { generateSecret, generateURI, verifySync } from "otplib";
 import qrcode from "qrcode";
 
-const rawKey = process.env.TOTP_ENCRYPTION_KEY || process.env.ENCRYPTION_KEY || "trenno-super-secret-key-32chars!";
+const rawKey = process.env.TOTP_ENCRYPTION_KEY;
+if (!rawKey) throw new Error("[2FA] TOTP_ENCRYPTION_KEY is not set in .env");
 let ENCRYPTION_KEY: Buffer;
 try {
   const b64 = Buffer.from(rawKey, "base64");
