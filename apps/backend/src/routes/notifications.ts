@@ -15,7 +15,7 @@ function serverError(res: Response, what: string, err: unknown) {
   return res.status(500).json({ error: { code: "INTERNAL_ERROR", message: `Failed to ${what.toLowerCase()}.` } });
 }
 
-const notFound = (res: Response) => res.status(404).json({ error: { code: "NOT_FOUND", message: "Notification not found." } });
+const notFound = (res: Response) => res.status(200).json({ ok: false, error: { code: "NOT_FOUND", message: "Notification not found." } });
 
 const unreadCount = (userId: string) => prisma.notification.count({ where: { userId, deletedAt: null, readAt: null } });
 
