@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { prisma } from "../app";
 import { AuthContext, requireAuth } from "../services/auth";
 import { CreateProjectSchema, PROJECT_KEY_RE, UpdateProjectSchema } from "../schemas";
+import { isRefusal, refuse } from "../services/refusal";
 import {
   ProjectError,
   assertProjectUnique,
@@ -28,13 +29,14 @@ export const projectsRouter = Router();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function sendError(res: Response, err: unknown, fallback: string) {
+  if (err instanceof ProjectError && isRefusal(err.status)) return refuse(res, err.code, err.message);
   if (err instanceof ProjectError) return res.status(err.status).json({ error: { code: err.code, message: err.message } });
   console.error(`[Projects] ${fallback}:`, err);
   return res.status(500).json({ error: { code: "INTERNAL_ERROR", message: fallback } });
 }
 
-const notFound = (res: Response) => res.status(404).json({ error: { code: "NOT_FOUND", message: "Project not found." } });
-const validationError = (res: Response, message: string) => res.status(400).json({ error: { code: "VALIDATION_ERROR", message } });
+const notFound = (res: Response) => res.status(200).json({ ok: false, error: { code: "NOT_FOUND", message: "Project not found." } });
+const validationError = (res: Response, message: string) => res.status(200).json({ ok: false, error: { code: "VALIDATION_ERROR", message } });
 
 // Resolves the org scope and the project named by :key, and checks that the caller may see it.
 // Anything out of scope is a 404, never a 403 (§4.1). With `manage`, only OA/SA pass.
@@ -52,7 +54,7 @@ export async function loadProject(req: Request, res: Response, auth: AuthContext
       return null;
     }
     if (manage && !canManageProjects(auth)) {
-      res.status(403).json({ error: { code: "FORBIDDEN", message: "Only Org Admins can change projects." } });
+      res.status(200).json({ ok: false, error: { code: "FORBIDDEN", message: "Only Org Admins can change projects." } });
       return null;
     }
     return { orgId, project };
@@ -78,7 +80,7 @@ projectsRouter.get("/projects", async (req: Request, res: Response) => {
   const auth = await requireAuth(req, res);
   if (!auth) return;
   const orgId = await resolveOrgScope(auth, req.query.orgId);
-  if (!orgId) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Organization not found." } });
+  if (!orgId) return res.status(200).json({ ok: false, error: { code: "NOT_FOUND", message: "Organization not found." } });
   try {
     const manage = canManageProjects(auth);
     const projects = await prisma.project.findMany({
@@ -104,12 +106,12 @@ projectsRouter.post("/projects", async (req: Request, res: Response) => {
   const auth = await requireAuth(req, res);
   if (!auth) return;
   if (!canManageProjects(auth)) {
-    return res.status(403).json({ error: { code: "FORBIDDEN", message: "Only Org Admins can create projects." } });
+    return res.status(200).json({ ok: false, error: { code: "FORBIDDEN", message: "Only Org Admins can create projects." } });
   }
   const parsed = CreateProjectSchema.safeParse(req.body);
   if (!parsed.success) return validationError(res, parsed.error.errors[0]?.message || "Invalid project details.");
   const orgId = await resolveOrgScope(auth, parsed.data.orgId);
-  if (!orgId) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Organization not found." } });
+  if (!orgId) return res.status(200).json({ ok: false, error: { code: "NOT_FOUND", message: "Organization not found." } });
 
   const { name, key, description, startDate, targetDate } = parsed.data;
   try {
@@ -133,7 +135,7 @@ projectsRouter.post("/projects", async (req: Request, res: Response) => {
     });
   } catch (err) {
     if (uniqueViolation(err)) {
-      return res.status(409).json({ error: { code: "PROJECT_CONFLICT", message: "Another project already uses this name or key." } });
+      return res.status(200).json({ ok: false, error: { code: "PROJECT_CONFLICT", message: "Another project already uses this name or key." } });
     }
     return sendError(res, err, "Failed to create the project.");
   }
@@ -165,7 +167,7 @@ projectsRouter.patch("/projects/:key", async (req: Request, res: Response) => {
   const { project } = found;
 
   if (req.body?.key !== undefined && String(req.body.key).trim().toUpperCase() !== project.key) {
-    return res.status(400).json({ error: { code: "KEY_IMMUTABLE", message: "A project's key can't be changed." } });
+    return res.status(200).json({ ok: false, error: { code: "KEY_IMMUTABLE", message: "A project's key can't be changed." } });
   }
   const parsed = UpdateProjectSchema.safeParse(req.body);
   if (!parsed.success) return validationError(res, parsed.error.errors[0]?.message || "Invalid project details.");
@@ -197,7 +199,7 @@ projectsRouter.patch("/projects/:key", async (req: Request, res: Response) => {
     return res.status(200).json({ message: "Project updated.", project: serializeProject(updated) });
   } catch (err) {
     if (uniqueViolation(err)) {
-      return res.status(409).json({ error: { code: "PROJECT_NAME_TAKEN", message: "Another project already uses this name." } });
+      return res.status(200).json({ ok: false, error: { code: "PROJECT_NAME_TAKEN", message: "Another project already uses this name." } });
     }
     return sendError(res, err, "Failed to update the project.");
   }
@@ -211,7 +213,7 @@ projectsRouter.delete("/projects/:key", async (req: Request, res: Response) => {
   if (!found) return;
   const confirmKey = typeof req.body?.confirmKey === "string" ? req.body.confirmKey.trim() : "";
   if (confirmKey !== found.project.key) {
-    return res.status(400).json({ error: { code: "CONFIRMATION_MISMATCH", message: "The typed key doesn't match the project key." } });
+    return res.status(200).json({ ok: false, error: { code: "CONFIRMATION_MISMATCH", message: "The typed key doesn't match the project key." } });
   }
   try {
     // Read before the delete revokes every access row.
