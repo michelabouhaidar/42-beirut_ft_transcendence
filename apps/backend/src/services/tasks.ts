@@ -74,7 +74,7 @@ export async function assertAssignable(orgId: string, projectId: string, userId:
     (m?.role === OrgRole.MEMBER &&
       Boolean(await prisma.projectAccess.findFirst({ where: { projectId, userId, revokedAt: null }, select: { id: true } })));
   if (!ok) {
-    throw new TaskError(400, "INVALID_ASSIGNEE", "The assignee must be an Org Admin or a Member with access to this project.");
+    throw new TaskError(422, "INVALID_ASSIGNEE", "The assignee must be an Org Admin or a Member with access to this project.");
   }
 }
 
