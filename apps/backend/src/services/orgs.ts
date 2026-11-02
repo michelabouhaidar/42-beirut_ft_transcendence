@@ -61,7 +61,7 @@ export async function deleteOrganization(orgId: string, actorId: string, confirm
   });
   if (!org) throw new OrgError(404, "NOT_FOUND", "Organization not found.");
   if (confirmName !== org.name) {
-    throw new OrgError(400, "CONFIRMATION_MISMATCH", "The typed name doesn't match the organization name.");
+    throw new OrgError(422, "CONFIRMATION_MISMATCH", "The typed name doesn't match the organization name.");
   }
 
   const memberIds = org.memberships.map((m) => m.userId);
