@@ -72,7 +72,7 @@ export function TaskPanel({ projectKey, projectName, number, assignees, refreshK
     } catch (err) {
       setSaveState("idle");
       const e = err as TaskApiError;
-      if (e.status === 409 && e.task) {
+      if (e.code === "VERSION_CONFLICT" && e.task) {
         toast.warning("This task was just changed by someone else", "Its latest version is shown. Make your change again.");
         setTask(e.task);
         onChanged(e.task);
@@ -136,7 +136,7 @@ export function TaskPanel({ projectKey, projectName, number, assignees, refreshK
         </>
       }
     >
-      {error?.status === 404 ? (
+      {error?.code === "NOT_FOUND" ? (
         <Alert variant="warning" title="This task isn't available">
           It was deleted, or you no longer have access to it.
         </Alert>
