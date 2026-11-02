@@ -36,7 +36,7 @@ export function UserProfilePage({ userId }: { userId: string }) {
       setError(null);
     } catch (err) {
       const e = err as ApiError;
-      setError(e.status === 404 ? "This person doesn't exist or isn't in your organization." : e.message);
+      setError(e.code === "NOT_FOUND" ? "This person doesn't exist or isn't in your organization." : e.message);
     } finally {
       setLoading(false);
     }
