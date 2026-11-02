@@ -57,11 +57,11 @@ searchRouter.get("/search/tasks", async (req: Request, res: Response) => {
   if (!auth) return;
   const parsed = SearchQuerySchema.safeParse(req.query);
   if (!parsed.success) {
-    return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: parsed.error.errors[0]?.message || "Invalid search." } });
+    return res.status(200).json({ ok: false, error: { code: "VALIDATION_ERROR", message: parsed.error.errors[0]?.message || "Invalid search." } });
   }
   const f = parsed.data;
   const orgId = auth.organization?.id;
-  if (!orgId) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Organization not found." } });
+  if (!orgId) return res.status(200).json({ ok: false, error: { code: "NOT_FOUND", message: "Organization not found." } });
 
   try {
     const scope = canManageProjects(auth)
