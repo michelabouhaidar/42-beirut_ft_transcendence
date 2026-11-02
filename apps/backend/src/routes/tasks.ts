@@ -4,6 +4,8 @@ import { prisma } from "../app";
 import { AuthContext, requireAuth } from "../services/auth";
 import { CommentSchema, CreateTaskSchema, MoveTaskSchema, UpdateTaskSchema } from "../schemas";
 import { hasProjectAccess } from "../services/projects";
+import { notify } from "../services/notifications";
+import { emitToProject } from "../realtime/socket";
 import {
   TaskError,
   canDeleteComment,
@@ -215,6 +217,12 @@ tasksRouter.post("/projects/:key/tasks/:n/comments", async (req: Request, res: R
       data: { taskId: found.task.id, authorId: auth.user.id, body: parsed.data.body },
       include: commentInclude,
     });
+    emitToProject(found.project.id, "comment:created", { id: comment.id, taskId: found.task.id, number: found.task.number });
+    await notify("comment.created", { kind: "comment", id: comment.id, taskId: found.task.id, authorId: auth.user.id }, auth.user.id, {
+      projectKey: found.project.key,
+      number: found.task.number,
+      title: found.task.title,
+    });
     return res.status(201).json({ comment: { ...serializeComment(comment), canEdit: true, canDelete: true } });
   } catch (err) {
     return sendError(res, err, "Failed to add the comment.");
@@ -243,6 +251,12 @@ async function loadComment(req: Request, res: Response, auth: AuthContext) {
   return comment;
 }
 
+const commentParams = (c: NonNullable<Awaited<ReturnType<typeof loadComment>>>) => ({
+  projectKey: c.task.project.key,
+  number: c.task.number,
+  title: c.task.title,
+});
+
 tasksRouter.patch("/comments/:id", async (req: Request, res: Response) => {
   const auth = await requireAuth(req, res);
   if (!auth) return;
@@ -257,6 +271,8 @@ tasksRouter.patch("/comments/:id", async (req: Request, res: Response) => {
       data: { body: parsed.data.body, editedAt: new Date() },
       include: commentInclude,
     });
+    emitToProject(comment.task.project.id, "comment:updated", { id: comment.id, taskId: comment.task.id, number: comment.task.number });
+    await notify("comment.updated", { kind: "comment", id: comment.id, taskId: comment.task.id, authorId: comment.authorId }, auth.user.id, commentParams(comment));
     return res.status(200).json({ comment: { ...serializeComment(updated), canEdit: true, canDelete: true } });
   } catch (err) {
     return sendError(res, err, "Failed to edit the comment.");
@@ -271,6 +287,9 @@ tasksRouter.delete("/comments/:id", async (req: Request, res: Response) => {
   if (!canDeleteComment(auth, comment.authorId)) return forbidden(res, "You can only delete your own comments.");
   try {
     await prisma.comment.update({ where: { id: comment.id }, data: { deletedAt: new Date(), deletedById: auth.user.id } });
+    emitToProject(comment.task.project.id, "comment:deleted", { id: comment.id, taskId: comment.task.id, number: comment.task.number });
+    // Only the author hears about it, and only when someone else (an admin) deleted it.
+    await notify("comment.deleted", { kind: "comment", id: comment.id, taskId: comment.task.id, authorId: comment.authorId }, auth.user.id, commentParams(comment));
     return res.status(200).json({ message: "Comment deleted." });
   } catch (err) {
     return sendError(res, err, "Failed to delete the comment.");
