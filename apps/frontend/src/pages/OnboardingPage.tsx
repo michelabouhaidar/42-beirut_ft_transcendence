@@ -82,8 +82,7 @@ function GettingStarted() {
     authApi
       .getInvitations()
       .then((data) => live && setInvitations(data.invitations || []))
-      .catch((err) => {
-        console.error("Invitations fetch error", err);
+      .catch(() => {
         if (live) setInvitations((i) => i ?? []);
       });
     return () => {
@@ -255,8 +254,8 @@ function WorkspaceHome() {
       if (data.members) setMembers(data.members);
       setProjects(projectList.projects);
       if (data.pendingInvitations) setPendingInvitations(data.pendingInvitations);
-    } catch (err) {
-      console.error("Workspace details fetch error", err);
+    } catch {
+      // The page shows what loaded; the next live event or reload retries.
     } finally {
       setIsLoading(false);
     }
