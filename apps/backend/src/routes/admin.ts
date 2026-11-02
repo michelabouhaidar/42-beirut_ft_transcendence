@@ -15,6 +15,7 @@ import { emitFriendshipChange, endFriendshipsForUser } from "../services/friends
 import { OrgError, deleteOrganization, findActiveOrgByName, notifyMembership, updateOrganization } from "../services/orgs";
 import { notify } from "../services/notifications";
 import { deleteAvatarFile } from "../services/avatars";
+import { isRefusal, refuse } from "../services/refusal";
 import { AccountStatus, OrgRole, MembershipStatus, InvitationRole, InvitationStatus } from "@prisma/client";
 
 export const adminRouter = Router();
@@ -33,7 +34,7 @@ async function requireSystemAdmin(req: Request, res: Response) {
   }
 
   if (!auth.user.isSystemAdmin || auth.role !== "SA") {
-    res.status(403).json({
+    res.status(200).json({ ok: false,
       error: {
         code: "FORBIDDEN",
         message: "System Administrator privileges required.",
@@ -281,7 +282,7 @@ adminRouter.get("/users/:id", async (req: Request, res: Response) => {
     });
 
     if (!user) {
-      return res.status(404).json({
+      return res.status(200).json({ ok: false,
         error: { code: "NOT_FOUND", message: "User account not found." },
       });
     }
@@ -546,26 +547,26 @@ adminRouter.post("/users/:id/suspend", async (req: Request, res: Response) => {
     });
 
     if (!targetUser) {
-      return res.status(404).json({
+      return res.status(200).json({ ok: false,
         error: { code: "NOT_FOUND", message: "User account not found." },
       });
     }
 
     if (targetUser.status === AccountStatus.SUSPENDED) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "ALREADY_SUSPENDED", message: "This account is already suspended." },
       });
     }
 
     if (targetUser.status === AccountStatus.DELETED) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "CANNOT_SUSPEND_DELETED", message: "Cannot suspend an anonymized deleted account." },
       });
     }
 
     // 1. Not on self
     if (targetUser.id === auth.user.id) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "CANNOT_SUSPEND_SELF", message: "You cannot suspend your own account." },
       });
     }
@@ -576,7 +577,7 @@ adminRouter.post("/users/:id/suspend", async (req: Request, res: Response) => {
         where: { isSystemAdmin: true, status: AccountStatus.ACTIVE },
       });
       if (activeSaCount <= 1) {
-        return res.status(409).json({
+        return res.status(200).json({ ok: false,
           error: { code: "LAST_SA", message: "Cannot suspend the last active System Administrator." },
         });
       }
@@ -593,7 +594,7 @@ adminRouter.post("/users/:id/suspend", async (req: Request, res: Response) => {
         },
       });
       if (activeOaCount <= 1) {
-        return res.status(409).json({
+        return res.status(200).json({ ok: false,
           error: {
             code: "LAST_ORG_ADMIN",
             message: "Cannot suspend the last active Organization Administrator of an active organization.",
@@ -650,19 +651,19 @@ adminRouter.post("/users/:id/reactivate", async (req: Request, res: Response) =>
     });
 
     if (!targetUser) {
-      return res.status(404).json({
+      return res.status(200).json({ ok: false,
         error: { code: "NOT_FOUND", message: "User account not found." },
       });
     }
 
     if (targetUser.status === AccountStatus.ACTIVE) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "ALREADY_ACTIVE", message: "Account is already active." },
       });
     }
 
     if (targetUser.status === AccountStatus.DELETED) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "CANNOT_REACTIVATE_DELETED", message: "Cannot reactivate a deleted account." },
       });
     }
@@ -718,26 +719,26 @@ adminRouter.delete("/users/:id", async (req: Request, res: Response) => {
     });
 
     if (!targetUser) {
-      return res.status(404).json({
+      return res.status(200).json({ ok: false,
         error: { code: "NOT_FOUND", message: "User account not found." },
       });
     }
 
     if (targetUser.status === AccountStatus.DELETED) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "ALREADY_DELETED", message: "Account is already deleted." },
       });
     }
 
     if (targetUser.id === auth.user.id) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "CANNOT_DELETE_SELF", message: "You can't delete your own account from the admin panel." },
       });
     }
 
     // 1. Typed email confirmation
     if (confirmEmail.toLowerCase() !== targetUser.email.toLowerCase()) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "CONFIRMATION_MISMATCH",
           message: `Confirmation email "${confirmEmail}" does not match target account email.`,
@@ -751,7 +752,7 @@ adminRouter.delete("/users/:id", async (req: Request, res: Response) => {
         where: { isSystemAdmin: true, status: AccountStatus.ACTIVE },
       });
       if (activeSaCount <= 1) {
-        return res.status(409).json({
+        return res.status(200).json({ ok: false,
           error: { code: "LAST_SA", message: "Cannot delete the last active System Administrator." },
         });
       }
@@ -768,7 +769,7 @@ adminRouter.delete("/users/:id", async (req: Request, res: Response) => {
         },
       });
       if (activeOaCount <= 1) {
-        return res.status(409).json({
+        return res.status(200).json({ ok: false,
           error: {
             code: "LAST_ORG_ADMIN",
             message: "Cannot delete the last active Organization Administrator of an active organization.",
@@ -841,7 +842,7 @@ adminRouter.post("/invitations", async (req: Request, res: Response) => {
   const isSa = req.body.isSa === true || role === "SA";
 
   if (!email || typeof email !== "string" || !email.includes("@")) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: { code: "INVALID_EMAIL", message: "Valid email address is required." },
     });
   }
@@ -855,7 +856,7 @@ adminRouter.post("/invitations", async (req: Request, res: Response) => {
         return res.status(200).json({ message: `System Administrator invitation sent to ${inv.email}.` });
       } catch (e) {
         if (e instanceof InvitationError) {
-          return res.status(e.status).json({ error: { code: e.code, message: e.message } });
+          return isRefusal(e.status) ? refuse(res, e.code, e.message) : res.status(e.status).json({ error: { code: e.code, message: e.message } });
         }
         throw e;
       }
@@ -863,7 +864,7 @@ adminRouter.post("/invitations", async (req: Request, res: Response) => {
 
     // Organization invitation (INV-01): same rules as the org route.
     if (!orgId) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "MISSING_ORG", message: "Pick the organization they'll join." },
       });
     }
@@ -873,7 +874,7 @@ adminRouter.post("/invitations", async (req: Request, res: Response) => {
       return res.status(201).json({ message: `Invitation sent to ${inv.email}.` });
     } catch (e) {
       if (e instanceof InvitationError) {
-        return res.status(e.status).json({ error: { code: e.code, message: e.message } });
+        return isRefusal(e.status) ? refuse(res, e.code, e.message) : res.status(e.status).json({ error: { code: e.code, message: e.message } });
       }
       throw e;
     }
@@ -936,7 +937,7 @@ adminRouter.post("/orgs", async (req: Request, res: Response) => {
 
   const parsed = CreateOrgSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: { code: "VALIDATION_ERROR", message: parsed.error.errors[0]?.message || "Invalid organization details." },
     });
   }
@@ -944,12 +945,12 @@ adminRouter.post("/orgs", async (req: Request, res: Response) => {
   const firstOaEmail =
     typeof req.body.firstOaEmail === "string" ? req.body.firstOaEmail.trim().toLowerCase() : "";
   if (firstOaEmail && !firstOaEmail.includes("@")) {
-    return res.status(400).json({ error: { code: "INVALID_EMAIL", message: "Enter a valid email for the first Org Admin." } });
+    return res.status(200).json({ ok: false, error: { code: "INVALID_EMAIL", message: "Enter a valid email for the first Org Admin." } });
   }
 
   try {
     if (await findActiveOrgByName(name)) {
-      return res.status(409).json({
+      return res.status(200).json({ ok: false,
         error: { code: "ORG_NAME_TAKEN", message: `An organization named "${name}" already exists.` },
       });
     }
@@ -994,7 +995,7 @@ adminRouter.post("/orgs", async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     if (err?.code === "P2002") {
-      return res.status(409).json({
+      return res.status(200).json({ ok: false,
         error: { code: "ORG_NAME_TAKEN", message: `An organization named "${name}" already exists.` },
       });
     }
@@ -1042,7 +1043,7 @@ adminRouter.get("/orgs/:id", async (req: Request, res: Response) => {
     });
 
     if (!org) {
-      return res.status(404).json({ error: { code: "NOT_FOUND", message: "Organization not found." } });
+      return res.status(200).json({ ok: false, error: { code: "NOT_FOUND", message: "Organization not found." } });
     }
 
     const projectIds = org.projects.map((p) => p.id);
@@ -1092,7 +1093,7 @@ adminRouter.patch("/orgs/:id", async (req: Request, res: Response) => {
 
   const parsed = CreateOrgSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: { code: "VALIDATION_ERROR", message: parsed.error.errors[0]?.message || "Invalid organization details." },
     });
   }
@@ -1105,7 +1106,7 @@ adminRouter.patch("/orgs/:id", async (req: Request, res: Response) => {
       organization: { id: updated.id, name: updated.name, description: updated.description },
     });
   } catch (err: any) {
-    if (err instanceof OrgError) return res.status(err.status).json({ error: { code: err.code, message: err.message } });
+    if (err instanceof OrgError) return isRefusal(err.status) ? refuse(res, err.code, err.message) : res.status(err.status).json({ error: { code: err.code, message: err.message } });
     console.error("[Admin] Update organization error:", err);
     return res.status(500).json({
       error: { code: "INTERNAL_ERROR", message: "Failed to update organization." },
@@ -1126,7 +1127,7 @@ adminRouter.delete("/orgs/:id", async (req: Request, res: Response) => {
     const { name, memberCount } = await deleteOrganization(req.params.id, auth.user.id, confirmName);
     return res.status(200).json({ message: `${name} deleted. ${memberCount} members are now unaffiliated.` });
   } catch (err: any) {
-    if (err instanceof OrgError) return res.status(err.status).json({ error: { code: err.code, message: err.message } });
+    if (err instanceof OrgError) return isRefusal(err.status) ? refuse(res, err.code, err.message) : res.status(err.status).json({ error: { code: err.code, message: err.message } });
     console.error("[Admin] Delete organization error:", err);
     return res.status(500).json({
       error: { code: "INTERNAL_ERROR", message: "Failed to delete organization." },
