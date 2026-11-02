@@ -17,7 +17,7 @@ export function AdminOrgDetailPage({ orgId }: { orgId: string }) {
   const { navigate } = useApp();
   const toast = useToast();
   const [org, setOrg] = useState<AdminOrgDetail | null>(null);
-  const [error, setError] = useState<{ status?: number; message: string } | null>(null);
+  const [error, setError] = useState<{ code?: string; message: string } | null>(null);
   const [tab, setTab] = useState<TabId>("members");
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
@@ -32,8 +32,8 @@ export function AdminOrgDetailPage({ orgId }: { orgId: string }) {
       setOrg(res.organization);
       setError(null);
     } catch (err) {
-      const e = err as Error & { status?: number };
-      setError({ status: e.status, message: e.message });
+      const e = err as Error & { code?: string };
+      setError({ code: e.code, message: e.message });
     }
   }, [orgId]);
 
@@ -59,7 +59,7 @@ export function AdminOrgDetailPage({ orgId }: { orgId: string }) {
     load();
   };
 
-  if (error?.status === 404) {
+  if (error?.code === "NOT_FOUND") {
     return (
       <ErrorPage
         code="404"
