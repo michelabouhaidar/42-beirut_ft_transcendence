@@ -14,12 +14,14 @@ import {
 import { FriendshipState, emitFriendshipChange, friendIdsOf, friendshipStateFor, loadPresence, shareOrganization } from "../services/friends";
 import { notify } from "../services/notifications";
 import { FriendRequestSchema } from "../schemas";
+import { isRefusal, refuse } from "../services/refusal";
 
 export const usersRouter = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function fail(res: Response, status: number, code: string, message: string) {
+  if (isRefusal(status)) return refuse(res, code, message);
   return res.status(status).json({ error: { code, message } });
 }
 
@@ -409,10 +411,10 @@ usersRouter.post("/friends/requests", async (req: Request, res: Response) => {
   if (!auth) return;
 
   const parsed = FriendRequestSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, "VALIDATION_ERROR", "Choose a person to send the request to.");
+  if (!parsed.success) return fail(res, 422, "VALIDATION_ERROR", "Choose a person to send the request to.");
   const targetId = parsed.data.userId;
 
-  if (targetId === auth.user.id) return fail(res, 400, "CANNOT_FRIEND_SELF", "You can't send a friend request to yourself.");
+  if (targetId === auth.user.id) return fail(res, 422, "CANNOT_FRIEND_SELF", "You can't send a friend request to yourself.");
   if (auth.user.isSystemAdmin || !auth.organization) {
     return fail(res, 403, "NO_ORGANIZATION", "You need to belong to an organization to add friends.");
   }
