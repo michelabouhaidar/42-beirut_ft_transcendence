@@ -21,12 +21,14 @@ import {
   notifyInvitation,
 } from "../services/invitations";
 import { emitToOrg } from "../realtime/socket";
+import { isRefusal, refuse } from "../services/refusal";
 
 // Invitations (spec §6.3 INV-01…04, API §12).
 export const invitationsRouter = Router();
 
 function sendError(res: Response, err: unknown, fallback: string) {
   if (err instanceof InvitationError) {
+    if (isRefusal(err.status)) return refuse(res, err.code, err.message);
     return res.status(err.status).json({ error: { code: err.code, message: err.message } });
   }
   console.error(`[Invitations] ${fallback}:`, err);
@@ -54,7 +56,7 @@ invitationsRouter.get("/orgs/:id/invitations", async (req: Request, res: Respons
   const auth = await requireAuth(req, res);
   if (!auth) return;
   if (!canManageOrg(auth, req.params.id)) {
-    return res.status(404).json({ error: { code: "NOT_FOUND", message: "Organization not found." } });
+    return res.status(200).json({ ok: false, error: { code: "NOT_FOUND", message: "Organization not found." } });
   }
 
   try {
@@ -87,19 +89,19 @@ invitationsRouter.post("/orgs/:id/invitations", async (req: Request, res: Respon
   const auth = await requireAuth(req, res);
   if (!auth) return;
   if (!canManageOrg(auth, req.params.id)) {
-    return res.status(404).json({ error: { code: "NOT_FOUND", message: "Organization not found." } });
+    return res.status(200).json({ ok: false, error: { code: "NOT_FOUND", message: "Organization not found." } });
   }
 
   const email = typeof req.body?.email === "string" ? req.body.email.trim() : "";
   const role = typeof req.body?.role === "string" ? req.body.role.toUpperCase() : "MEMBER";
   if (!z.string().email().safeParse(email).success) {
-    return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Enter a valid email address." } });
+    return res.status(200).json({ ok: false, error: { code: "VALIDATION_ERROR", message: "Enter a valid email address." } });
   }
   if (!["OA", "MEMBER", "VIEWER"].includes(role)) {
-    return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Role must be Org Admin, Member or Viewer." } });
+    return res.status(200).json({ ok: false, error: { code: "VALIDATION_ERROR", message: "Role must be Org Admin, Member or Viewer." } });
   }
   if (role === "OA" && auth.role !== "SA") {
-    return res.status(403).json({
+    return res.status(200).json({ ok: false,
       error: { code: "ROLE_NOT_ALLOWED", message: "Only a System Admin can invite an Org Admin. Invite them as Member or Viewer." },
     });
   }
@@ -236,7 +238,7 @@ invitationsRouter.get("/invitations/sa/by-token/:token", async (req: Request, re
 invitationsRouter.post("/invitations/sa/by-token/:token/accept", async (req: Request, res: Response) => {
   const parsed = AcceptAsNewSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: { code: "VALIDATION_ERROR", message: parsed.error.errors[0]?.message || "Check the form and try again." },
     });
   }
@@ -294,7 +296,7 @@ invitationsRouter.post("/invitations/sa/by-token/:token/accept", async (req: Req
     });
   } catch (err: any) {
     if (err?.code === "P2002") {
-      return res.status(409).json({ error: { code: "ACCOUNT_EXISTS", message: "An account already uses this email." } });
+      return res.status(200).json({ ok: false, error: { code: "ACCOUNT_EXISTS", message: "An account already uses this email." } });
     }
     return sendError(res, err, "Failed to accept invitation.");
   }
@@ -305,7 +307,7 @@ invitationsRouter.post("/invitations/sa/by-token/:token/accept", async (req: Req
 invitationsRouter.post("/invitations/by-token/:token/accept", async (req: Request, res: Response) => {
   const parsed = AcceptAsNewSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: { code: "VALIDATION_ERROR", message: parsed.error.errors[0]?.message || "Check the form and try again." },
     });
   }
@@ -371,7 +373,7 @@ invitationsRouter.post("/invitations/by-token/:token/accept", async (req: Reques
     });
   } catch (err: any) {
     if (err?.code === "P2002") {
-      return res.status(409).json({
+      return res.status(200).json({ ok: false,
         error: { code: "ACCOUNT_EXISTS", message: "An account already uses this email. Sign in to accept the invitation." },
       });
     }
