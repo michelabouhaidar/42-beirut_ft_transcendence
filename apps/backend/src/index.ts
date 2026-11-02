@@ -1,13 +1,17 @@
 import { createServer } from "http";
 import { createApp, prisma } from "./app.js";
+import { initSocketServer } from "./realtime/socket.js";
 
 const PORT = Number(process.env.PORT) || 3000;
 const app = createApp();
 const server = createServer(app);
 
+// Attach Socket.IO
+initSocketServer(server);
+
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`[Trenno Backend] Server listening on http://0.0.0.0:${PORT}`);
-  console.log(`[Trenno Backend] Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log(`[Trenno Backend] Environment: ${process.env.NODE_ENV}`);
 });
 
 // Graceful shutdown handling
