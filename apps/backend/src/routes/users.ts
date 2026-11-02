@@ -11,7 +11,8 @@ import {
   isAvatarFileName,
   saveAvatar,
 } from "../services/avatars";
-import { FriendshipState, friendIdsOf, friendshipStateFor, loadPresence, shareOrganization } from "../services/friends";
+import { FriendshipState, emitFriendshipChange, friendIdsOf, friendshipStateFor, loadPresence, shareOrganization } from "../services/friends";
+import { notify } from "../services/notifications";
 import { FriendRequestSchema } from "../schemas";
 
 export const usersRouter = Router();
@@ -452,6 +453,8 @@ usersRouter.post("/friends/requests", async (req: Request, res: Response) => {
       return fail(res, 409, "REQUEST_PENDING", "A friend request between you two is already pending.");
     }
 
+    emitFriendshipChange([auth.user.id, targetId], { friendshipId: result.friendship.id, reason: "requested" });
+    await notify("friend.request_received", { kind: "friendship", id: result.friendship.id, userId: targetId }, auth.user.id);
     return res.status(201).json({ friendshipId: result.friendship.id });
   } catch (err) {
     return serverError(res, "Friend request", err);
@@ -492,6 +495,11 @@ function respondTo(action: "accept" | "decline") {
         data: { status: action === "accept" ? FriendshipStatus.ACCEPTED : FriendshipStatus.DECLINED },
       });
       if (count === 0) return fail(res, 409, "NOT_PENDING", "This request can't be answered any more.");
+      emitFriendshipChange([f.requesterId, f.addresseeId], { friendshipId: f.id, reason: action === "accept" ? "accepted" : "declined" });
+      // A decline is silent (§6.9 lists only received and accepted).
+      if (action === "accept") {
+        await notify("friend.request_accepted", { kind: "friendship", id: f.id, userId: f.requesterId }, auth.user.id);
+      }
       return res.status(200).json({ status: action === "accept" ? "ACCEPTED" : "DECLINED" });
     } catch (err) {
       return serverError(res, `Friend request ${action}`, err);
@@ -511,10 +519,16 @@ usersRouter.delete("/friendships/:id", async (req: Request, res: Response) => {
     const allowed =
       f.status === FriendshipStatus.ACCEPTED || (f.status === FriendshipStatus.PENDING && f.requesterId === auth.user.id);
     if (!allowed) return fail(res, 409, "NOT_REMOVABLE", "There is nothing to remove.");
-    await prisma.friendship.updateMany({
+    const { count } = await prisma.friendship.updateMany({
       where: { id: f.id, status: f.status },
       data: { status: FriendshipStatus.REMOVED },
     });
+    if (count > 0) {
+      emitFriendshipChange([f.requesterId, f.addresseeId], {
+        friendshipId: f.id,
+        reason: f.status === FriendshipStatus.PENDING ? "cancelled" : "removed",
+      });
+    }
     return res.status(200).json({ status: "REMOVED" });
   } catch (err) {
     return serverError(res, "Friendship removal", err);
