@@ -19,6 +19,8 @@ import {
   sendAccountLockedEmail,
   sendTwoFactorDisabledEmail,
 } from "../services/mailer";
+import { disconnectUserSockets } from "../realtime/socket";
+import { notify } from "../services/notifications";
 import { checkRateLimit } from "../services/rateLimiter";
 import {
   encryptSecret,
@@ -383,6 +385,7 @@ authRouter.post("/login", async (req: Request, res: Response) => {
         sendAccountLockedEmail(user.email, user.firstName, lockoutMinutes).catch((err) =>
           console.error("[Mailer Error] Account locked email failed:", err)
         );
+        await notify("account.locked", { kind: "user", id: user.id }, null, { minutes: lockoutMinutes });
 
         return res.status(423).json({
           error: {
@@ -698,6 +701,8 @@ authRouter.post("/logout", async (req: Request, res: Response) => {
         await prisma.session.deleteMany({
           where: { idHash },
         });
+        // Only this session's sockets: the user's other devices stay connected.
+        await disconnectUserSockets(session.userId, { sessionHash: idHash, reason: "You signed out." });
       }
     } catch (err) {
       console.warn("[Auth] Logout session deletion warning:", err);
@@ -918,6 +923,9 @@ authRouter.post("/password/reset", async (req: Request, res: Response) => {
       }),
     ]);
 
+    await disconnectUserSockets(tokenRecord.userId, { reason: "Your password was reset. Sign in again." });
+    await notify("account.password_reset", { kind: "user", id: tokenRecord.userId }, null);
+
     sendPasswordChangedEmail(tokenRecord.user.email, tokenRecord.user.firstName).catch((err) =>
       console.error("[Mailer Error] Password changed email failed:", err)
     );
@@ -1078,11 +1086,13 @@ authRouter.post("/password/change", async (req: Request, res: Response) => {
         },
         data: { revokedAt: new Date() },
       });
+      await disconnectUserSockets(user.id, { exceptSessionHash: currentHash, reason: "Your password was changed. Sign in again." });
     }
 
     sendPasswordChangedEmail(user.email, user.firstName).catch((err) =>
       console.error("[Mailer Error] Password changed confirmation email failed:", err)
     );
+    await notify("account.password_changed", { kind: "user", id: user.id }, null);
 
     return res.status(200).json({
       success: true,
@@ -1265,6 +1275,7 @@ authRouter.post("/2fa/enable", async (req: Request, res: Response) => {
         codeHash: hashToken(c.toUpperCase().trim()),
       })),
     });
+    await notify("account.2fa_enabled", { kind: "user", id: authContext.user.id }, null);
 
     return res.status(200).json({
       success: true,
@@ -1357,6 +1368,7 @@ authRouter.post("/2fa/disable", async (req: Request, res: Response) => {
       where: { userId: user.id },
     });
 
+    await notify("account.2fa_disabled", { kind: "user", id: user.id }, null);
     // Send confirmation email (2FA-04)
     await sendTwoFactorDisabledEmail(user.email, user.firstName);
 
