@@ -6,6 +6,7 @@ import { CommentSchema, CreateTaskSchema, MoveTaskSchema, UpdateTaskSchema } fro
 import { hasProjectAccess } from "../services/projects";
 import { notify } from "../services/notifications";
 import { emitToProject } from "../realtime/socket";
+import { isRefusal, refuse } from "../services/refusal";
 import {
   TaskError,
   canDeleteComment,
@@ -33,14 +34,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function sendError(res: Response, err: unknown, fallback: string) {
   if (err instanceof TaskError) {
     const task = (err as TaskError & { task?: unknown }).task;
+    if (isRefusal(err.status)) return refuse(res, err.code, err.message, task ? { task } : {});
     return res.status(err.status).json({ error: { code: err.code, message: err.message }, ...(task ? { task } : {}) });
   }
   console.error(`[Tasks] ${fallback}:`, err);
   return res.status(500).json({ error: { code: "INTERNAL_ERROR", message: fallback } });
 }
 
-const validationError = (res: Response, message: string) => res.status(400).json({ error: { code: "VALIDATION_ERROR", message } });
-const forbidden = (res: Response, message: string) => res.status(403).json({ error: { code: "FORBIDDEN", message } });
+const validationError = (res: Response, message: string) => res.status(200).json({ ok: false, error: { code: "VALIDATION_ERROR", message } });
+const forbidden = (res: Response, message: string) => res.status(200).json({ ok: false, error: { code: "FORBIDDEN", message } });
 
 async function loadTask(req: Request, res: Response, auth: AuthContext) {
   const found = await loadProject(req, res, auth, false);
@@ -232,7 +234,7 @@ tasksRouter.post("/projects/:key/tasks/:n/comments", async (req: Request, res: R
 // A comment is reached through its task's project, with the same checks as the task (§7.7).
 async function loadComment(req: Request, res: Response, auth: AuthContext) {
   if (!UUID_RE.test(req.params.id)) {
-    res.status(404).json({ error: { code: "NOT_FOUND", message: "Comment not found." } });
+    res.status(200).json({ ok: false, error: { code: "NOT_FOUND", message: "Comment not found." } });
     return null;
   }
   const comment = await prisma.comment.findFirst({
@@ -245,7 +247,7 @@ async function loadComment(req: Request, res: Response, auth: AuthContext) {
   const project = comment?.task.project;
   const inScope = project && auth.organization?.id === project.orgId && (await hasProjectAccess(auth, project.id));
   if (!comment || !inScope) {
-    res.status(404).json({ error: { code: "NOT_FOUND", message: "Comment not found." } });
+    res.status(200).json({ ok: false, error: { code: "NOT_FOUND", message: "Comment not found." } });
     return null;
   }
   return comment;
