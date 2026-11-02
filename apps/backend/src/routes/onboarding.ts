@@ -1,10 +1,11 @@
 import { Router, Request, Response } from "express";
 import { prisma } from "../app";
 import { getAuthContextFromRequest } from "../services/auth";
-import { assertInvitationUsable, InvitationError } from "../services/invitations";
+import { assertInvitationUsable, InvitationError, notifyInvitation } from "../services/invitations";
 import { CreateOrgSchema } from "../schemas";
 import { findActiveOrgByName } from "../services/orgs";
 import { OrgRole, MembershipStatus, InvitationStatus } from "@prisma/client";
+import { emitToOrg, joinOrgRoom } from "../realtime/socket";
 
 export const onboardingRouter = Router();
 
@@ -146,6 +147,10 @@ onboardingRouter.post("/invitations/:id/accept", async (req: Request, res: Respo
       }
     });
 
+    await notifyInvitation("invitation.accepted", invitation, invitation.organization.name, auth.user.id);
+    joinOrgRoom(auth.user.id, invitation.orgId);
+    emitToOrg(invitation.orgId, "member:updated", { userId: auth.user.id });
+
     return res.status(200).json({
       success: true,
       message: `You have successfully joined ${invitation.organization.name}.`,
@@ -196,6 +201,7 @@ onboardingRouter.post("/invitations/:id/decline", async (req: Request, res: Resp
       where: { id: invitation.id },
       data: { status: InvitationStatus.DECLINED },
     });
+    await notifyInvitation("invitation.declined", invitation, invitation.organization.name, auth.user.id);
 
     return res.status(200).json({
       success: true,
@@ -271,6 +277,7 @@ onboardingRouter.post("/orgs", async (req: Request, res: Response) => {
 
       return { org, membership };
     });
+    joinOrgRoom(auth.user.id, result.org.id);
 
     return res.status(201).json({
       success: true,
