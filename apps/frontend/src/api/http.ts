@@ -22,7 +22,7 @@ async function request<T>(method: string, url: string, { body, signal }: Options
   if (res.status === 401) notifySessionExpired();
   // A refusal (wrong password, name taken, link used…) arrives as 200 with ok:false; pages handle it like an error.
   if (!res.ok || data?.ok === false) {
-	const err = new Error(data?.error?.message || data?.message || `Request failed with status ${res.status}`) as ApiError;
+	const err = new Error(data?.error?.message || data?.message || "The server did not answer. Please try again in a moment.") as ApiError;
     err.code = data?.error?.code;
     err.status = res.status;
     err.task = data?.task;
