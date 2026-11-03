@@ -349,9 +349,6 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
   const targetId = req.params.id;
   const { firstName, lastName, jobTitle, bio, isSystemAdmin, orgRole } = req.body;
 
-  const refuse = (status: number, code: string, message: string) =>
-    res.status(status).json({ error: { code, message } });
-
   try {
     const targetUser = await prisma.user.findUnique({
       where: { id: targetId },
@@ -360,9 +357,9 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
       },
     });
 
-    if (!targetUser) return refuse(404, "NOT_FOUND", "User account not found.");
+    if (!targetUser) return refuse(res, "NOT_FOUND", "User account not found.");
     if (targetUser.status === AccountStatus.DELETED) {
-      return refuse(400, "CANNOT_EDIT_DELETED", "A deleted account can't be edited.");
+      return refuse(res, "CANNOT_EDIT_DELETED", "A deleted account can't be edited.");
     }
 
     // 1. Validate every field before writing anything, so a refused role
@@ -372,7 +369,7 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
 
     if (firstName !== undefined) {
       const v = String(firstName).trim();
-      if (!v || v.length > 50) return refuse(400, "INVALID_FIRST_NAME", "First name must be 1–50 characters.");
+      if (!v || v.length > 50) return refuse(res, "INVALID_FIRST_NAME", "First name must be 1–50 characters.");
       if (v !== targetUser.firstName) {
         updates.firstName = v;
         changes.push(`First name changed to "${v}"`);
@@ -380,7 +377,7 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
     }
     if (lastName !== undefined) {
       const v = String(lastName).trim();
-      if (!v || v.length > 50) return refuse(400, "INVALID_LAST_NAME", "Last name must be 1–50 characters.");
+      if (!v || v.length > 50) return refuse(res, "INVALID_LAST_NAME", "Last name must be 1–50 characters.");
       if (v !== targetUser.lastName) {
         updates.lastName = v;
         changes.push(`Last name changed to "${v}"`);
@@ -388,7 +385,7 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
     }
     if (jobTitle !== undefined) {
       const v = jobTitle ? String(jobTitle).trim() : null;
-      if (v && v.length > 100) return refuse(400, "INVALID_JOB_TITLE", "Job title must not exceed 100 characters.");
+      if (v && v.length > 100) return refuse(res, "INVALID_JOB_TITLE", "Job title must not exceed 100 characters.");
       if (v !== targetUser.jobTitle) {
         updates.jobTitle = v;
         changes.push("Job title updated");
@@ -396,7 +393,7 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
     }
     if (bio !== undefined) {
       const v = bio ? String(bio).trim() : null;
-      if (v && v.length > 500) return refuse(400, "INVALID_BIO", "Bio must not exceed 500 characters.");
+      if (v && v.length > 500) return refuse(res, "INVALID_BIO", "Bio must not exceed 500 characters.");
       if (v !== targetUser.bio) {
         updates.bio = v;
         changes.push("Bio updated");
@@ -406,7 +403,7 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
     if (typeof isSystemAdmin === "boolean" && isSystemAdmin !== targetUser.isSystemAdmin) {
       if (!isSystemAdmin) {
         if (targetUser.status === AccountStatus.ACTIVE && (await countActiveSystemAdmins()) <= 1) {
-          return refuse(409, "LAST_SA", "This is the last active System Admin. Grant SA to someone else first.");
+          return refuse(res, "LAST_SA", "This is the last active System Admin. Grant SA to someone else first.");
         }
         changes.push("System Admin role revoked");
       } else {
@@ -415,7 +412,7 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
         if (oaMembership) {
           const oaCounts = await countActiveOrgAdmins([oaMembership.orgId]);
           if ((oaCounts.get(oaMembership.orgId) ?? 0) <= 1) {
-            return refuse(409, "LAST_ORG_ADMIN", "This user is the last Org Admin of their organization. Appoint another OA first.");
+            return refuse(res, "LAST_ORG_ADMIN", "This user is the last Org Admin of their organization. Appoint another OA first.");
           }
         }
         changes.push("System Admin role granted");
@@ -430,12 +427,12 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
         : null;
 
     if (nextRole && updates.isSystemAdmin === true) {
-      return refuse(400, "CONFLICTING_CHANGES", "Granting System Admin removes the org membership; don't change the org role in the same edit.");
+      return refuse(res, "CONFLICTING_CHANGES", "Granting System Admin removes the org membership; don't change the org role in the same edit.");
     }
     if (nextRole && membership.role === OrgRole.OA) {
       const oaCounts = await countActiveOrgAdmins([membership.orgId]);
       if ((oaCounts.get(membership.orgId) ?? 0) <= 1) {
-        return refuse(409, "LAST_ORG_ADMIN", "This user is the last Org Admin of their organization. Appoint another OA first.");
+        return refuse(res, "LAST_ORG_ADMIN", "This user is the last Org Admin of their organization. Appoint another OA first.");
       }
     }
     if (nextRole) changes.push(`Organization role changed to ${nextRole}`);
