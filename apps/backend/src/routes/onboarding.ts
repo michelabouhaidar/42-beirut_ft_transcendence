@@ -1,10 +1,12 @@
 import { Router, Request, Response } from "express";
 import { prisma } from "../app";
 import { getAuthContextFromRequest } from "../services/auth";
-import { assertInvitationUsable, InvitationError } from "../services/invitations";
+import { assertInvitationUsable, InvitationError, notifyInvitation } from "../services/invitations";
 import { CreateOrgSchema } from "../schemas";
 import { findActiveOrgByName } from "../services/orgs";
 import { OrgRole, MembershipStatus, InvitationStatus } from "@prisma/client";
+import { emitToOrg, joinOrgRoom } from "../realtime/socket";
+import { isRefusal, refuse } from "../services/refusal";
 
 export const onboardingRouter = Router();
 
@@ -75,7 +77,7 @@ onboardingRouter.post("/invitations/:id/accept", async (req: Request, res: Respo
 
   // A System Admin belongs to no organization (§4.1).
   if (auth.user.isSystemAdmin) {
-    return res.status(403).json({
+    return res.status(200).json({ ok: false,
       error: { code: "SA_NO_ORG", message: "System Admins can't join an organization. Ask another admin to revoke your System Admin role first." },
     });
   }
@@ -89,7 +91,7 @@ onboardingRouter.post("/invitations/:id/accept", async (req: Request, res: Respo
     });
 
     if (!invitation || invitation.email.toLowerCase() !== auth.user.email.toLowerCase()) {
-      return res.status(404).json({
+      return res.status(200).json({ ok: false,
         error: { code: "NOT_FOUND", message: "Invitation not found." },
       });
     }
@@ -97,12 +99,13 @@ onboardingRouter.post("/invitations/:id/accept", async (req: Request, res: Respo
       assertInvitationUsable(invitation);
     } catch (e) {
       const err = e as InvitationError;
+      if (isRefusal(err.status)) return refuse(res, err.code, err.message);
       return res.status(err.status).json({ error: { code: err.code, message: err.message } });
     }
 
     // INV-03: one org per user (§4.1). Leaving the current org comes first.
     if (auth.organization && auth.organization.id !== invitation.orgId) {
-      return res.status(409).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "ALREADY_IN_ORG",
           message: `You're already a member of ${auth.organization.name}. Leave it first, then accept this invitation.`,
@@ -146,6 +149,10 @@ onboardingRouter.post("/invitations/:id/accept", async (req: Request, res: Respo
       }
     });
 
+    await notifyInvitation("invitation.accepted", invitation, invitation.organization.name, auth.user.id);
+    joinOrgRoom(auth.user.id, invitation.orgId);
+    emitToOrg(invitation.orgId, "member:updated", { userId: auth.user.id });
+
     return res.status(200).json({
       success: true,
       message: `You have successfully joined ${invitation.organization.name}.`,
@@ -179,23 +186,24 @@ onboardingRouter.post("/invitations/:id/decline", async (req: Request, res: Resp
       include: { organization: { select: { name: true } } },
     });
 
-    if (
-      !invitation ||
-      invitation.email.toLowerCase() !== auth.user.email.toLowerCase() ||
-      invitation.status !== InvitationStatus.PENDING
-    ) {
-      return res.status(404).json({
+    if (!invitation || invitation.email.toLowerCase() !== auth.user.email.toLowerCase()) {
+      return res.status(200).json({ ok: false,
         error: {
           code: "NOT_FOUND",
           message: "Invitation not found.",
         },
       });
     }
+    // Revoked, expired or answered in another tab meanwhile.
+    if (invitation.status !== InvitationStatus.PENDING) {
+      return refuse(res, "NOT_PENDING", `This invitation was already ${invitation.status.toLowerCase()}.`);
+    }
 
     await prisma.invitation.update({
       where: { id: invitation.id },
       data: { status: InvitationStatus.DECLINED },
     });
+    await notifyInvitation("invitation.declined", invitation, invitation.organization.name, auth.user.id);
 
     return res.status(200).json({
       success: true,
@@ -219,14 +227,14 @@ onboardingRouter.post("/orgs", async (req: Request, res: Response) => {
 
   // A System Admin belongs to no organization (§4.1).
   if (auth.user.isSystemAdmin) {
-    return res.status(403).json({
+    return res.status(200).json({ ok: false,
       error: { code: "SA_NO_ORG", message: "System Admins don't join organizations. Create it from Admin > Organizations and invite its first Org Admin." },
     });
   }
 
   const parseResult = CreateOrgSchema.safeParse(req.body);
   if (!parseResult.success) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: {
         code: "VALIDATION_ERROR",
         message: parseResult.error.errors[0]?.message || "Invalid organization details.",
@@ -239,14 +247,14 @@ onboardingRouter.post("/orgs", async (req: Request, res: Response) => {
 
   // One organization at a time (§4.1): leave the current one first.
   if (auth.organization) {
-    return res.status(409).json({
+    return res.status(200).json({ ok: false,
       error: { code: "ALREADY_IN_ORG", message: "You already belong to an organization. Leave it before creating a new one." },
     });
   }
 
   try {
     if (await findActiveOrgByName(name)) {
-      return res.status(409).json({
+      return res.status(200).json({ ok: false,
         error: { code: "ORG_NAME_TAKEN", message: `An organization named "${name}" already exists.` },
       });
     }
@@ -271,6 +279,7 @@ onboardingRouter.post("/orgs", async (req: Request, res: Response) => {
 
       return { org, membership };
     });
+    joinOrgRoom(auth.user.id, result.org.id);
 
     return res.status(201).json({
       success: true,
@@ -284,7 +293,7 @@ onboardingRouter.post("/orgs", async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     if (err?.code === "P2002") {
-      return res.status(409).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "ORG_ALREADY_EXISTS",
           message: `An organization named "${name}" already exists. Please choose a different name.`,

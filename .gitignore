@@ -17,4 +17,3 @@ build/
 # Runtime and local storage
 *.log
 .DS_Store
-backups/

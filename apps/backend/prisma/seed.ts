@@ -13,8 +13,12 @@ function validatePasswordPolicy(password: string): boolean {
 }
 
 async function main() {
-  const saEmail = process.env.SEED_SA_EMAIL || "admin@trenno.local";
-  const saPassword = process.env.SEED_SA_PASSWORD || "Change-me-1!";
+  const saEmail = process.env.SEED_SA_EMAIL;
+  const saPassword = process.env.SEED_SA_PASSWORD;
+
+  if (!saEmail || !saPassword) {
+    throw new Error(`[Seed] FATAL: SEED_SA_EMAIL and SEED_SA_PASSWORD must be set in .env.`);
+  }
 
   if (!validatePasswordPolicy(saPassword)) {
     throw new Error(

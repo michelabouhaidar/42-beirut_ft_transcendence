@@ -60,8 +60,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = async () => {
     try {
       await authApi.logout();
-    } catch (err) {
-      console.error("Logout error", err);
+    } catch {
+      // Signed out locally either way.
     } finally {
       apply(SIGNED_OUT);
     }

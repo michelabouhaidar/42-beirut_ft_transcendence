@@ -8,11 +8,14 @@ import {
   sendInvitationEmail,
 } from "../services/mailer";
 import { CreateOrgSchema } from "../schemas";
-import { createOrgInvitation, createSaInvitation, InvitationError } from "../services/invitations";
+import { createOrgInvitation, createSaInvitation, InvitationError, notifyInvitation } from "../services/invitations";
 import { getAuthContextFromRequest, generateSecureToken } from "../services/auth";
-import { endFriendshipsForUser } from "../services/friends";
-import { OrgError, deleteOrganization, findActiveOrgByName, updateOrganization } from "../services/orgs";
+import { disconnectUserSockets, emitToOrg, emitToUser, leaveOrgRooms } from "../realtime/socket";
+import { emitFriendshipChange, endFriendshipsForUser } from "../services/friends";
+import { OrgError, deleteOrganization, findActiveOrgByName, notifyMembership, updateOrganization } from "../services/orgs";
+import { notify } from "../services/notifications";
 import { deleteAvatarFile } from "../services/avatars";
+import { isRefusal, refuse } from "../services/refusal";
 import { AccountStatus, OrgRole, MembershipStatus, InvitationRole, InvitationStatus } from "@prisma/client";
 
 export const adminRouter = Router();
@@ -31,7 +34,7 @@ async function requireSystemAdmin(req: Request, res: Response) {
   }
 
   if (!auth.user.isSystemAdmin || auth.role !== "SA") {
-    res.status(403).json({
+    res.status(200).json({ ok: false,
       error: {
         code: "FORBIDDEN",
         message: "System Administrator privileges required.",
@@ -279,7 +282,7 @@ adminRouter.get("/users/:id", async (req: Request, res: Response) => {
     });
 
     if (!user) {
-      return res.status(404).json({
+      return res.status(200).json({ ok: false,
         error: { code: "NOT_FOUND", message: "User account not found." },
       });
     }
@@ -443,6 +446,7 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
 
     // 2. Apply in one transaction.
     let unassignedTasks = 0;
+    let exFriends: string[] = [];
     await prisma.$transaction(async (tx) => {
       await tx.user.update({ where: { id: targetId }, data: updates });
 
@@ -455,7 +459,7 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
           where: { userId: targetId, revokedAt: null, project: { orgId: membership.orgId } },
           data: { revokedAt: new Date() },
         });
-        await endFriendshipsForUser(tx, targetId);
+        exFriends = await endFriendshipsForUser(tx, targetId);
         const r = await tx.task.updateMany({
           where: { assigneeId: targetId, project: { orgId: membership.orgId } },
           data: { assigneeId: null },
@@ -476,6 +480,35 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
       }
     });
 
+    if (updates.isSystemAdmin !== undefined || nextRole) {
+      emitToUser(targetId, "me:updated", { reason: "role" });
+    }
+    if (exFriends.length) emitFriendshipChange([targetId, ...exFriends], { reason: "system_admin" });
+    if (membership && (nextRole || updates.isSystemAdmin === true)) {
+      // Granting SA ends the membership (§4.1): out of the org's live rooms.
+      if (updates.isSystemAdmin === true) await leaveOrgRooms([targetId], membership.orgId);
+      emitToOrg(membership.orgId, "member:updated", { userId: targetId });
+    }
+
+    // §6.9 Account: edited or role changed by an SA → the user; an org role change also tells the org's admins.
+    const profileFields = ["firstName", "lastName", "jobTitle", "bio"].filter((f) => f in updates);
+    if (profileFields.length) {
+      await notify("account.updated", { kind: "user", id: targetId }, auth.user.id, { fields: profileFields });
+    }
+    if (typeof updates.isSystemAdmin === "boolean") {
+      await notify("account.role_changed", { kind: "user", id: targetId }, auth.user.id, { systemAdmin: updates.isSystemAdmin });
+    }
+    if (membership && (nextRole || updates.isSystemAdmin === true)) {
+      const org = await prisma.organization.findUnique({ where: { id: membership.orgId }, select: { name: true } });
+      const m = {
+        ...membership,
+        user: { firstName: String(updates.firstName ?? targetUser.firstName), lastName: String(updates.lastName ?? targetUser.lastName) },
+        organization: { name: org?.name ?? "" },
+      };
+      if (nextRole) await notifyMembership("membership.role_changed", m, auth.user.id, { from: membership.role, role: nextRole });
+      else await notifyMembership("membership.removed", m, auth.user.id, { role: membership.role });
+    }
+
     try {
       await sendRoleChangedEmail(targetUser.email, targetUser.firstName, changes.join(", "));
     } catch (mailErr) {
@@ -493,7 +526,7 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
 
 // =========================================================================
 // ADM-05: Suspend / reactivate
-// Sessions revoked immediately; email to the user.
+// Sessions revoked and sockets closed immediately; email to the user.
 // Not on self or last SA.
 // =========================================================================
 adminRouter.post("/users/:id/suspend", async (req: Request, res: Response) => {
@@ -514,26 +547,26 @@ adminRouter.post("/users/:id/suspend", async (req: Request, res: Response) => {
     });
 
     if (!targetUser) {
-      return res.status(404).json({
+      return res.status(200).json({ ok: false,
         error: { code: "NOT_FOUND", message: "User account not found." },
       });
     }
 
     if (targetUser.status === AccountStatus.SUSPENDED) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "ALREADY_SUSPENDED", message: "This account is already suspended." },
       });
     }
 
     if (targetUser.status === AccountStatus.DELETED) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "CANNOT_SUSPEND_DELETED", message: "Cannot suspend an anonymized deleted account." },
       });
     }
 
     // 1. Not on self
     if (targetUser.id === auth.user.id) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "CANNOT_SUSPEND_SELF", message: "You cannot suspend your own account." },
       });
     }
@@ -544,7 +577,7 @@ adminRouter.post("/users/:id/suspend", async (req: Request, res: Response) => {
         where: { isSystemAdmin: true, status: AccountStatus.ACTIVE },
       });
       if (activeSaCount <= 1) {
-        return res.status(409).json({
+        return res.status(200).json({ ok: false,
           error: { code: "LAST_SA", message: "Cannot suspend the last active System Administrator." },
         });
       }
@@ -561,7 +594,7 @@ adminRouter.post("/users/:id/suspend", async (req: Request, res: Response) => {
         },
       });
       if (activeOaCount <= 1) {
-        return res.status(409).json({
+        return res.status(200).json({ ok: false,
           error: {
             code: "LAST_ORG_ADMIN",
             message: "Cannot suspend the last active Organization Administrator of an active organization.",
@@ -581,6 +614,12 @@ adminRouter.post("/users/:id/suspend", async (req: Request, res: Response) => {
       where: { userId: targetId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+
+    // Close real-time sockets immediately (ADM-05)
+    await disconnectUserSockets(targetId, { reason: "Your account was suspended." });
+    for (const m of targetUser.memberships) emitToOrg(m.orgId, "member:updated", { userId: targetId });
+    // Waits in their inbox until they're reactivated.
+    await notify("account.suspended", { kind: "user", id: targetId }, auth.user.id);
 
     // Send notification email to the user
     try {
@@ -612,19 +651,19 @@ adminRouter.post("/users/:id/reactivate", async (req: Request, res: Response) =>
     });
 
     if (!targetUser) {
-      return res.status(404).json({
+      return res.status(200).json({ ok: false,
         error: { code: "NOT_FOUND", message: "User account not found." },
       });
     }
 
     if (targetUser.status === AccountStatus.ACTIVE) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "ALREADY_ACTIVE", message: "Account is already active." },
       });
     }
 
     if (targetUser.status === AccountStatus.DELETED) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "CANNOT_REACTIVATE_DELETED", message: "Cannot reactivate a deleted account." },
       });
     }
@@ -637,6 +676,8 @@ adminRouter.post("/users/:id/reactivate", async (req: Request, res: Response) =>
         lockedUntil: null,
       },
     });
+
+    await notify("account.reactivated", { kind: "user", id: targetId }, auth.user.id);
 
     try {
       await sendAccountReactivatedEmail(targetUser.email, targetUser.firstName);
@@ -678,26 +719,26 @@ adminRouter.delete("/users/:id", async (req: Request, res: Response) => {
     });
 
     if (!targetUser) {
-      return res.status(404).json({
+      return res.status(200).json({ ok: false,
         error: { code: "NOT_FOUND", message: "User account not found." },
       });
     }
 
     if (targetUser.status === AccountStatus.DELETED) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "ALREADY_DELETED", message: "Account is already deleted." },
       });
     }
 
     if (targetUser.id === auth.user.id) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "CANNOT_DELETE_SELF", message: "You can't delete your own account from the admin panel." },
       });
     }
 
     // 1. Typed email confirmation
     if (confirmEmail.toLowerCase() !== targetUser.email.toLowerCase()) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "CONFIRMATION_MISMATCH",
           message: `Confirmation email "${confirmEmail}" does not match target account email.`,
@@ -711,7 +752,7 @@ adminRouter.delete("/users/:id", async (req: Request, res: Response) => {
         where: { isSystemAdmin: true, status: AccountStatus.ACTIVE },
       });
       if (activeSaCount <= 1) {
-        return res.status(409).json({
+        return res.status(200).json({ ok: false,
           error: { code: "LAST_SA", message: "Cannot delete the last active System Administrator." },
         });
       }
@@ -728,7 +769,7 @@ adminRouter.delete("/users/:id", async (req: Request, res: Response) => {
         },
       });
       if (activeOaCount <= 1) {
-        return res.status(409).json({
+        return res.status(200).json({ ok: false,
           error: {
             code: "LAST_ORG_ADMIN",
             message: "Cannot delete the last active Organization Administrator of an active organization.",
@@ -746,6 +787,7 @@ adminRouter.delete("/users/:id", async (req: Request, res: Response) => {
 
     // 5. Anonymize in one transaction (§7.1).
     const now = new Date();
+    let exFriends: string[] = [];
     await prisma.$transaction(async (tx) => {
       await tx.session.updateMany({ where: { userId: targetId, revokedAt: null }, data: { revokedAt: now } });
       await tx.twoFactor.deleteMany({ where: { userId: targetId } });
@@ -755,7 +797,7 @@ adminRouter.delete("/users/:id", async (req: Request, res: Response) => {
         data: { status: MembershipStatus.REMOVED, leftAt: now },
       });
       await tx.projectAccess.updateMany({ where: { userId: targetId, revokedAt: null }, data: { revokedAt: now } });
-      await endFriendshipsForUser(tx, targetId);
+      exFriends = await endFriendshipsForUser(tx, targetId);
       await tx.task.updateMany({ where: { assigneeId: targetId }, data: { assigneeId: null } });
       await tx.user.update({
         where: { id: targetId },
@@ -773,6 +815,9 @@ adminRouter.delete("/users/:id", async (req: Request, res: Response) => {
         },
       });
     });
+    await disconnectUserSockets(targetId, { reason: "Your account was deleted." });
+    emitFriendshipChange(exFriends, { reason: "deleted" });
+    for (const m of targetUser.memberships) emitToOrg(m.orgId, "member:updated", { userId: targetId });
     await deleteAvatarFile(targetUser.avatarPath);
 
     return res.status(200).json({
@@ -797,7 +842,7 @@ adminRouter.post("/invitations", async (req: Request, res: Response) => {
   const isSa = req.body.isSa === true || role === "SA";
 
   if (!email || typeof email !== "string" || !email.includes("@")) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: { code: "INVALID_EMAIL", message: "Valid email address is required." },
     });
   }
@@ -811,7 +856,7 @@ adminRouter.post("/invitations", async (req: Request, res: Response) => {
         return res.status(200).json({ message: `System Administrator invitation sent to ${inv.email}.` });
       } catch (e) {
         if (e instanceof InvitationError) {
-          return res.status(e.status).json({ error: { code: e.code, message: e.message } });
+          return isRefusal(e.status) ? refuse(res, e.code, e.message) : res.status(e.status).json({ error: { code: e.code, message: e.message } });
         }
         throw e;
       }
@@ -819,7 +864,7 @@ adminRouter.post("/invitations", async (req: Request, res: Response) => {
 
     // Organization invitation (INV-01): same rules as the org route.
     if (!orgId) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "MISSING_ORG", message: "Pick the organization they'll join." },
       });
     }
@@ -829,7 +874,7 @@ adminRouter.post("/invitations", async (req: Request, res: Response) => {
       return res.status(201).json({ message: `Invitation sent to ${inv.email}.` });
     } catch (e) {
       if (e instanceof InvitationError) {
-        return res.status(e.status).json({ error: { code: e.code, message: e.message } });
+        return isRefusal(e.status) ? refuse(res, e.code, e.message) : res.status(e.status).json({ error: { code: e.code, message: e.message } });
       }
       throw e;
     }
@@ -892,7 +937,7 @@ adminRouter.post("/orgs", async (req: Request, res: Response) => {
 
   const parsed = CreateOrgSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: { code: "VALIDATION_ERROR", message: parsed.error.errors[0]?.message || "Invalid organization details." },
     });
   }
@@ -900,18 +945,18 @@ adminRouter.post("/orgs", async (req: Request, res: Response) => {
   const firstOaEmail =
     typeof req.body.firstOaEmail === "string" ? req.body.firstOaEmail.trim().toLowerCase() : "";
   if (firstOaEmail && !firstOaEmail.includes("@")) {
-    return res.status(400).json({ error: { code: "INVALID_EMAIL", message: "Enter a valid email for the first Org Admin." } });
+    return res.status(200).json({ ok: false, error: { code: "INVALID_EMAIL", message: "Enter a valid email for the first Org Admin." } });
   }
 
   try {
     if (await findActiveOrgByName(name)) {
-      return res.status(409).json({
+      return res.status(200).json({ ok: false,
         error: { code: "ORG_NAME_TAKEN", message: `An organization named "${name}" already exists.` },
       });
     }
 
     const { raw: rawToken, hash: tokenHash } = generateSecureToken();
-    const { org } = await prisma.$transaction(async (tx) => {
+    const { org, firstOaInvitation } = await prisma.$transaction(async (tx) => {
       const created = await tx.organization.create({
         data: { name, description: description || null, createdById: auth.user.id },
       });
@@ -940,6 +985,7 @@ adminRouter.post("/orgs", async (req: Request, res: Response) => {
         console.warn("[Admin] Could not send first-OA invitation email:", mailErr);
       }
     }
+    if (firstOaInvitation) await notifyInvitation("invitation.received", firstOaInvitation, org.name, auth.user.id);
 
     return res.status(201).json({
       message: firstOaEmail
@@ -949,7 +995,7 @@ adminRouter.post("/orgs", async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     if (err?.code === "P2002") {
-      return res.status(409).json({
+      return res.status(200).json({ ok: false,
         error: { code: "ORG_NAME_TAKEN", message: `An organization named "${name}" already exists.` },
       });
     }
@@ -997,7 +1043,7 @@ adminRouter.get("/orgs/:id", async (req: Request, res: Response) => {
     });
 
     if (!org) {
-      return res.status(404).json({ error: { code: "NOT_FOUND", message: "Organization not found." } });
+      return res.status(200).json({ ok: false, error: { code: "NOT_FOUND", message: "Organization not found." } });
     }
 
     const projectIds = org.projects.map((p) => p.id);
@@ -1047,7 +1093,7 @@ adminRouter.patch("/orgs/:id", async (req: Request, res: Response) => {
 
   const parsed = CreateOrgSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: { code: "VALIDATION_ERROR", message: parsed.error.errors[0]?.message || "Invalid organization details." },
     });
   }
@@ -1060,7 +1106,7 @@ adminRouter.patch("/orgs/:id", async (req: Request, res: Response) => {
       organization: { id: updated.id, name: updated.name, description: updated.description },
     });
   } catch (err: any) {
-    if (err instanceof OrgError) return res.status(err.status).json({ error: { code: err.code, message: err.message } });
+    if (err instanceof OrgError) return isRefusal(err.status) ? refuse(res, err.code, err.message) : res.status(err.status).json({ error: { code: err.code, message: err.message } });
     console.error("[Admin] Update organization error:", err);
     return res.status(500).json({
       error: { code: "INTERNAL_ERROR", message: "Failed to update organization." },
@@ -1081,7 +1127,7 @@ adminRouter.delete("/orgs/:id", async (req: Request, res: Response) => {
     const { name, memberCount } = await deleteOrganization(req.params.id, auth.user.id, confirmName);
     return res.status(200).json({ message: `${name} deleted. ${memberCount} members are now unaffiliated.` });
   } catch (err: any) {
-    if (err instanceof OrgError) return res.status(err.status).json({ error: { code: err.code, message: err.message } });
+    if (err instanceof OrgError) return isRefusal(err.status) ? refuse(res, err.code, err.message) : res.status(err.status).json({ error: { code: err.code, message: err.message } });
     console.error("[Admin] Delete organization error:", err);
     return res.status(500).json({
       error: { code: "INTERNAL_ERROR", message: "Failed to delete organization." },

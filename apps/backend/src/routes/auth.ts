@@ -19,6 +19,8 @@ import {
   sendAccountLockedEmail,
   sendTwoFactorDisabledEmail,
 } from "../services/mailer";
+import { disconnectUserSockets } from "../realtime/socket";
+import { notify } from "../services/notifications";
 import { checkRateLimit } from "../services/rateLimiter";
 import {
   encryptSecret,
@@ -53,7 +55,7 @@ const failed2faAttempts = new Map<string, number>();
 async function requireGuest(req: Request, res: Response): Promise<boolean> {
   const authCtx = await getAuthContextFromRequest(req);
   if (authCtx) {
-    res.status(403).json({
+    res.status(200).json({ ok: false,
       error: {
         code: "ALREADY_AUTHENTICATED",
         message: "You are already logged in. Please log out first.",
@@ -69,7 +71,7 @@ authRouter.post("/signup", async (req: Request, res: Response) => {
   if (!(await requireGuest(req, res))) return;
   const parseResult = SignUpSchema.safeParse(req.body);
   if (!parseResult.success) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: {
         code: "VALIDATION_ERROR",
         message: parseResult.error.errors[0]?.message || "Validation failed",
@@ -164,7 +166,7 @@ authRouter.post("/verify", async (req: Request, res: Response) => {
   if (!(await requireGuest(req, res))) return;
   const parseResult = VerifyEmailSchema.safeParse(req.body);
   if (!parseResult.success) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: {
         code: "VALIDATION_ERROR",
         message: parseResult.error.errors[0]?.message || "Invalid verification token format.",
@@ -182,7 +184,7 @@ authRouter.post("/verify", async (req: Request, res: Response) => {
     });
 
     if (!tokenRecord || tokenRecord.type !== AuthTokenType.VERIFY_EMAIL || tokenRecord.usedAt) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "INVALID_TOKEN",
           message: "Verification link is invalid or has already been used.",
@@ -191,7 +193,7 @@ authRouter.post("/verify", async (req: Request, res: Response) => {
     }
 
     if (tokenRecord.expiresAt < new Date()) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "TOKEN_EXPIRED",
           message: "Verification link has expired. Please request a new one.",
@@ -231,7 +233,7 @@ authRouter.post("/verify/resend", async (req: Request, res: Response) => {
   if (!(await requireGuest(req, res))) return;
   const parseResult = ResendVerificationSchema.safeParse(req.body);
   if (!parseResult.success) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: {
         code: "VALIDATION_ERROR",
         message: parseResult.error.errors[0]?.message || "Invalid email address.",
@@ -245,7 +247,7 @@ authRouter.post("/verify/resend", async (req: Request, res: Response) => {
   // Rate limit: max 3 per hour per email
   const limitCheck = checkRateLimit(`resend_verify:${normalizedEmail}`, 3, 3600);
   if (limitCheck.limited) {
-    return res.status(429).json({
+    return res.status(200).json({ ok: false,
       error: {
         code: "RATE_LIMITED",
         message: `Too many verification requests. Please wait ${Math.ceil(limitCheck.retryAfter / 60)} minutes before trying again.`,
@@ -301,7 +303,7 @@ authRouter.post("/login", async (req: Request, res: Response) => {
   if (!(await requireGuest(req, res))) return;
   const parseResult = LoginSchema.safeParse(req.body);
   if (!parseResult.success) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: {
         code: "VALIDATION_ERROR",
         message: parseResult.error.errors[0]?.message || "Invalid login credentials format.",
@@ -318,7 +320,7 @@ authRouter.post("/login", async (req: Request, res: Response) => {
   // Rate limit: max 10 failed login attempts per minute per IP
   const ipCheck = checkRateLimit(`login_ip:${clientIp}`, 10, 60);
   if (ipCheck.limited) {
-    return res.status(429).json({
+    return res.status(200).json({ ok: false,
       error: {
         code: "RATE_LIMITED",
         message: `Too many login attempts from this network. Try again in ${ipCheck.retryAfter} seconds.`,
@@ -342,7 +344,7 @@ authRouter.post("/login", async (req: Request, res: Response) => {
     });
 
     if (!user || !user.passwordHash) {
-      return res.status(401).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "INVALID_CREDENTIALS",
           message: "Invalid email or password.",
@@ -354,7 +356,7 @@ authRouter.post("/login", async (req: Request, res: Response) => {
     const now = new Date();
     if (user.lockedUntil && user.lockedUntil > now) {
       const remainingMinutes = Math.ceil((user.lockedUntil.getTime() - now.getTime()) / 60000);
-      return res.status(423).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "ACCOUNT_LOCKED",
           message: `Account is temporarily locked. Try again in ${remainingMinutes} minute${remainingMinutes > 1 ? "s" : ""}.`,
@@ -383,8 +385,9 @@ authRouter.post("/login", async (req: Request, res: Response) => {
         sendAccountLockedEmail(user.email, user.firstName, lockoutMinutes).catch((err) =>
           console.error("[Mailer Error] Account locked email failed:", err)
         );
+        await notify("account.locked", { kind: "user", id: user.id }, null, { minutes: lockoutMinutes });
 
-        return res.status(423).json({
+        return res.status(200).json({ ok: false,
           error: {
             code: "ACCOUNT_LOCKED",
             message: "Account is temporarily locked. Try again in 15 minutes.",
@@ -396,7 +399,7 @@ authRouter.post("/login", async (req: Request, res: Response) => {
           data: { failedLoginCount: newCount, ...(lockExpired ? { lockedUntil: null } : {}) },
         });
 
-        return res.status(401).json({
+        return res.status(200).json({ ok: false,
           error: {
             code: "INVALID_CREDENTIALS",
             message: "Invalid email or password.",
@@ -418,7 +421,7 @@ authRouter.post("/login", async (req: Request, res: Response) => {
 
     // Check account status
     if (user.status === AccountStatus.PENDING_VERIFICATION) {
-      return res.status(403).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "EMAIL_NOT_VERIFIED",
           message: "Verify your email first.",
@@ -427,7 +430,7 @@ authRouter.post("/login", async (req: Request, res: Response) => {
     }
 
     if (user.status === AccountStatus.SUSPENDED) {
-      return res.status(403).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "ACCOUNT_SUSPENDED",
           message: "Account suspended.",
@@ -507,7 +510,7 @@ authRouter.post("/login", async (req: Request, res: Response) => {
 authRouter.post("/login/2fa", async (req: Request, res: Response) => {
   const parseResult = TwoFactorLoginSchema.safeParse(req.body);
   if (!parseResult.success) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: {
         code: "VALIDATION_ERROR",
         message: parseResult.error.errors[0]?.message || "Invalid 2FA verification request.",
@@ -520,9 +523,9 @@ authRouter.post("/login/2fa", async (req: Request, res: Response) => {
   const rawSession = cookies[SESSION_COOKIE_NAME];
 
   if (!rawSession) {
-    return res.status(401).json({
+    return res.status(200).json({ ok: false,
       error: {
-        code: "UNAUTHORIZED",
+        code: "EXPIRED_SESSION",
         message: "2FA session expired. Please log in again.",
       },
     });
@@ -550,9 +553,9 @@ authRouter.post("/login/2fa", async (req: Request, res: Response) => {
     });
 
     if (!session || !session.pending2fa || session.expiresAt < new Date() || session.revokedAt) {
-      return res.status(401).json({
+      return res.status(200).json({ ok: false,
         error: {
-          code: "UNAUTHORIZED",
+          code: "EXPIRED_SESSION",
           message: "2FA session expired or invalid. Please log in again.",
         },
       });
@@ -560,7 +563,7 @@ authRouter.post("/login/2fa", async (req: Request, res: Response) => {
 
     const user = session.user;
     if (!user.twoFactor || !user.twoFactor.enabledAt) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "BAD_REQUEST",
           message: "2FA is not enabled on this account.",
@@ -574,7 +577,7 @@ authRouter.post("/login/2fa", async (req: Request, res: Response) => {
         failed2faAttempts.delete(idHash);
         await prisma.session.delete({ where: { idHash } }).catch(() => {});
         clearSessionCookie(res);
-        return res.status(401).json({
+        return res.status(200).json({ ok: false,
           error: {
             code: "EXPIRED_SESSION",
             message: "Too many failed attempts (5/5). Your verification session has ended. Please sign in again.",
@@ -582,7 +585,7 @@ authRouter.post("/login/2fa", async (req: Request, res: Response) => {
         });
       }
       failed2faAttempts.set(idHash, attempts);
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "INVALID_2FA_CODE",
           message: `${errMsg} (${5 - attempts} attempts remaining)`,
@@ -698,6 +701,8 @@ authRouter.post("/logout", async (req: Request, res: Response) => {
         await prisma.session.deleteMany({
           where: { idHash },
         });
+        // Only this session's sockets: the user's other devices stay connected.
+        await disconnectUserSockets(session.userId, { sessionHash: idHash, reason: "You signed out." });
       }
     } catch (err) {
       console.warn("[Auth] Logout session deletion warning:", err);
@@ -716,7 +721,7 @@ authRouter.post("/password/forgot", async (req: Request, res: Response) => {
   if (!(await requireGuest(req, res))) return;
   const parseResult = ForgotPasswordSchema.safeParse(req.body);
   if (!parseResult.success) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: {
         code: "VALIDATION_ERROR",
         message: parseResult.error.errors[0]?.message || "Invalid email address format.",
@@ -730,7 +735,7 @@ authRouter.post("/password/forgot", async (req: Request, res: Response) => {
   // Rate limit: max 3 per hour per email
   const limitCheck = checkRateLimit(`forgot_pass:${normalizedEmail}`, 3, 3600);
   if (limitCheck.limited) {
-    return res.status(429).json({
+    return res.status(200).json({ ok: false,
       error: {
         code: "RATE_LIMITED",
         message: `Too many password reset requests. Please wait ${Math.ceil(limitCheck.retryAfter / 60)} minutes before trying again.`,
@@ -805,7 +810,7 @@ authRouter.all("/password/reset/verify", async (req: Request, res: Response) => 
   const token = typeof rawToken === "string" ? rawToken.trim() : "";
 
   if (!token) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: {
         code: "INVALID_TOKEN",
         message: "Password reset link is invalid or has already been used.",
@@ -822,7 +827,7 @@ authRouter.all("/password/reset/verify", async (req: Request, res: Response) => 
     });
 
     if (!tokenRecord || tokenRecord.type !== AuthTokenType.RESET_PASSWORD || tokenRecord.usedAt) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "INVALID_TOKEN",
           message: "Password reset link is invalid or has already been used.",
@@ -831,7 +836,7 @@ authRouter.all("/password/reset/verify", async (req: Request, res: Response) => 
     }
 
     if (tokenRecord.expiresAt < new Date()) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "TOKEN_EXPIRED",
           message: "Password reset link has expired. Please request a new one.",
@@ -859,7 +864,7 @@ authRouter.post("/password/reset", async (req: Request, res: Response) => {
   if (!(await requireGuest(req, res))) return;
   const parseResult = ResetPasswordSchema.safeParse(req.body);
   if (!parseResult.success) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: {
         code: "VALIDATION_ERROR",
         message: parseResult.error.errors[0]?.message || "Validation failed.",
@@ -878,7 +883,7 @@ authRouter.post("/password/reset", async (req: Request, res: Response) => {
     });
 
     if (!tokenRecord || tokenRecord.type !== AuthTokenType.RESET_PASSWORD || tokenRecord.usedAt) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "INVALID_TOKEN",
           message: "Password reset link is invalid or has already been used.",
@@ -887,7 +892,7 @@ authRouter.post("/password/reset", async (req: Request, res: Response) => {
     }
 
     if (tokenRecord.expiresAt < new Date()) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "TOKEN_EXPIRED",
           message: "Password reset link has expired. Please request a new one.",
@@ -918,6 +923,9 @@ authRouter.post("/password/reset", async (req: Request, res: Response) => {
       }),
     ]);
 
+    await disconnectUserSockets(tokenRecord.userId, { reason: "Your password was reset. Sign in again." });
+    await notify("account.password_reset", { kind: "user", id: tokenRecord.userId }, null);
+
     sendPasswordChangedEmail(tokenRecord.user.email, tokenRecord.user.firstName).catch((err) =>
       console.error("[Mailer Error] Password changed email failed:", err)
     );
@@ -941,13 +949,9 @@ authRouter.post("/password/reset", async (req: Request, res: Response) => {
 authRouter.get("/me", async (req: Request, res: Response) => {
   try {
     const authContext = await getAuthContextFromRequest(req);
+    // Not being signed in is an answer to "who am I", not an error.
     if (!authContext) {
-      return res.status(401).json({
-        error: {
-          code: "UNAUTHORIZED",
-          message: "Authentication required.",
-        },
-      });
+      return res.status(200).json({ user: null, organization: null, role: null });
     }
 
     return res.status(200).json({
@@ -979,7 +983,7 @@ authRouter.patch("/profile", async (req: Request, res: Response) => {
     const parsed = UpdateProfileSchema.safeParse(req.body);
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "VALIDATION_ERROR", message: issue?.message || "Invalid profile data.", field: issue?.path[0] },
       });
     }
@@ -1032,7 +1036,7 @@ authRouter.post("/password/change", async (req: Request, res: Response) => {
 
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "VALIDATION_ERROR", message: "Current password and new password are required." },
       });
     }
@@ -1041,21 +1045,21 @@ authRouter.post("/password/change", async (req: Request, res: Response) => {
       where: { id: authContext.user.id },
     });
     if (!user || !user.passwordHash) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "BAD_REQUEST", message: "Account has no password set." },
       });
     }
 
     const isMatch = await verifyPassword(user.passwordHash, currentPassword);
     if (!isMatch) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "INVALID_CREDENTIALS", message: "Current password is incorrect." },
       });
     }
 
     const parseResult = PasswordSchema.safeParse(newPassword);
     if (!parseResult.success) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "VALIDATION_ERROR", message: parseResult.error.errors[0]?.message || "New password does not meet security requirements." },
       });
     }
@@ -1078,11 +1082,13 @@ authRouter.post("/password/change", async (req: Request, res: Response) => {
         },
         data: { revokedAt: new Date() },
       });
+      await disconnectUserSockets(user.id, { exceptSessionHash: currentHash, reason: "Your password was changed. Sign in again." });
     }
 
     sendPasswordChangedEmail(user.email, user.firstName).catch((err) =>
       console.error("[Mailer Error] Password changed confirmation email failed:", err)
     );
+    await notify("account.password_changed", { kind: "user", id: user.id }, null);
 
     return res.status(200).json({
       success: true,
@@ -1143,7 +1149,7 @@ authRouter.post("/2fa/setup", async (req: Request, res: Response) => {
 
     const parseResult = TwoFactorSetupSchema.safeParse(req.body);
     if (!parseResult.success) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "VALIDATION_ERROR",
           message: parseResult.error.errors[0]?.message || "Password is required to set up 2FA.",
@@ -1157,14 +1163,14 @@ authRouter.post("/2fa/setup", async (req: Request, res: Response) => {
     });
 
     if (!user || !user.passwordHash) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "BAD_REQUEST", message: "Account has no password configured." },
       });
     }
 
     const isPasswordValid = await verifyPassword(user.passwordHash, password);
     if (!isPasswordValid) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "INVALID_PASSWORD", message: "Incorrect password. Please verify your current password." },
       });
     }
@@ -1213,7 +1219,7 @@ authRouter.post("/2fa/enable", async (req: Request, res: Response) => {
 
     const parseResult = TwoFactorEnableSchema.safeParse(req.body);
     if (!parseResult.success) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "VALIDATION_ERROR",
           message: parseResult.error.errors[0]?.message || "Invalid 6-digit verification code.",
@@ -1227,7 +1233,7 @@ authRouter.post("/2fa/enable", async (req: Request, res: Response) => {
     });
 
     if (!twoFactor) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "NO_PENDING_SETUP",
           message: "No pending 2FA configuration found. Please start 2FA setup first.",
@@ -1239,7 +1245,7 @@ authRouter.post("/2fa/enable", async (req: Request, res: Response) => {
     const isValid = verifyTOTPCode(secret, code);
 
     if (!isValid) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "INVALID_2FA_CODE",
           message: "Invalid verification code. Please check your authenticator app and try again.",
@@ -1265,6 +1271,7 @@ authRouter.post("/2fa/enable", async (req: Request, res: Response) => {
         codeHash: hashToken(c.toUpperCase().trim()),
       })),
     });
+    await notify("account.2fa_enabled", { kind: "user", id: authContext.user.id }, null);
 
     return res.status(200).json({
       success: true,
@@ -1291,7 +1298,7 @@ authRouter.post("/2fa/disable", async (req: Request, res: Response) => {
 
     const parseResult = TwoFactorDisableSchema.safeParse(req.body);
     if (!parseResult.success) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "VALIDATION_ERROR",
           message: parseResult.error.errors[0]?.message || "Password and code are required to disable 2FA.",
@@ -1309,20 +1316,20 @@ authRouter.post("/2fa/disable", async (req: Request, res: Response) => {
     });
 
     if (!user || !user.passwordHash) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "BAD_REQUEST", message: "Account has no password configured." },
       });
     }
 
     const isPasswordValid = await verifyPassword(user.passwordHash, password);
     if (!isPasswordValid) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "INVALID_PASSWORD", message: "Incorrect password. Please verify your current password." },
       });
     }
 
     if (!user.twoFactor || !user.twoFactor.enabledAt) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: { code: "BAD_REQUEST", message: "Two-factor authentication is not active on this account." },
       });
     }
@@ -1341,7 +1348,7 @@ authRouter.post("/2fa/disable", async (req: Request, res: Response) => {
     }
 
     if (!isCodeValid) {
-      return res.status(400).json({
+      return res.status(200).json({ ok: false,
         error: {
           code: "INVALID_2FA_CODE",
           message: "Invalid verification code or recovery code.",
@@ -1357,6 +1364,7 @@ authRouter.post("/2fa/disable", async (req: Request, res: Response) => {
       where: { userId: user.id },
     });
 
+    await notify("account.2fa_disabled", { kind: "user", id: user.id }, null);
     // Send confirmation email (2FA-04)
     await sendTwoFactorDisabledEmail(user.email, user.firstName);
 

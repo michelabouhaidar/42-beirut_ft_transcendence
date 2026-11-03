@@ -11,14 +11,17 @@ import {
   isAvatarFileName,
   saveAvatar,
 } from "../services/avatars";
-import { FriendshipState, friendIdsOf, friendshipStateFor, loadPresence, shareOrganization } from "../services/friends";
+import { FriendshipState, emitFriendshipChange, friendIdsOf, friendshipStateFor, loadPresence, shareOrganization } from "../services/friends";
+import { notify } from "../services/notifications";
 import { FriendRequestSchema } from "../schemas";
+import { isRefusal, refuse } from "../services/refusal";
 
 export const usersRouter = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function fail(res: Response, status: number, code: string, message: string) {
+  if (isRefusal(status)) return refuse(res, code, message);
   return res.status(status).json({ error: { code, message } });
 }
 
@@ -408,10 +411,10 @@ usersRouter.post("/friends/requests", async (req: Request, res: Response) => {
   if (!auth) return;
 
   const parsed = FriendRequestSchema.safeParse(req.body);
-  if (!parsed.success) return fail(res, 400, "VALIDATION_ERROR", "Choose a person to send the request to.");
+  if (!parsed.success) return fail(res, 422, "VALIDATION_ERROR", "Choose a person to send the request to.");
   const targetId = parsed.data.userId;
 
-  if (targetId === auth.user.id) return fail(res, 400, "CANNOT_FRIEND_SELF", "You can't send a friend request to yourself.");
+  if (targetId === auth.user.id) return fail(res, 422, "CANNOT_FRIEND_SELF", "You can't send a friend request to yourself.");
   if (auth.user.isSystemAdmin || !auth.organization) {
     return fail(res, 403, "NO_ORGANIZATION", "You need to belong to an organization to add friends.");
   }
@@ -452,6 +455,8 @@ usersRouter.post("/friends/requests", async (req: Request, res: Response) => {
       return fail(res, 409, "REQUEST_PENDING", "A friend request between you two is already pending.");
     }
 
+    emitFriendshipChange([auth.user.id, targetId], { friendshipId: result.friendship.id, reason: "requested" });
+    await notify("friend.request_received", { kind: "friendship", id: result.friendship.id, userId: targetId }, auth.user.id);
     return res.status(201).json({ friendshipId: result.friendship.id });
   } catch (err) {
     return serverError(res, "Friend request", err);
@@ -492,6 +497,11 @@ function respondTo(action: "accept" | "decline") {
         data: { status: action === "accept" ? FriendshipStatus.ACCEPTED : FriendshipStatus.DECLINED },
       });
       if (count === 0) return fail(res, 409, "NOT_PENDING", "This request can't be answered any more.");
+      emitFriendshipChange([f.requesterId, f.addresseeId], { friendshipId: f.id, reason: action === "accept" ? "accepted" : "declined" });
+      // A decline is silent (§6.9 lists only received and accepted).
+      if (action === "accept") {
+        await notify("friend.request_accepted", { kind: "friendship", id: f.id, userId: f.requesterId }, auth.user.id);
+      }
       return res.status(200).json({ status: action === "accept" ? "ACCEPTED" : "DECLINED" });
     } catch (err) {
       return serverError(res, `Friend request ${action}`, err);
@@ -511,10 +521,16 @@ usersRouter.delete("/friendships/:id", async (req: Request, res: Response) => {
     const allowed =
       f.status === FriendshipStatus.ACCEPTED || (f.status === FriendshipStatus.PENDING && f.requesterId === auth.user.id);
     if (!allowed) return fail(res, 409, "NOT_REMOVABLE", "There is nothing to remove.");
-    await prisma.friendship.updateMany({
+    const { count } = await prisma.friendship.updateMany({
       where: { id: f.id, status: f.status },
       data: { status: FriendshipStatus.REMOVED },
     });
+    if (count > 0) {
+      emitFriendshipChange([f.requesterId, f.addresseeId], {
+        friendshipId: f.id,
+        reason: f.status === FriendshipStatus.PENDING ? "cancelled" : "removed",
+      });
+    }
     return res.status(200).json({ status: "REMOVED" });
   } catch (err) {
     return serverError(res, "Friendship removal", err);

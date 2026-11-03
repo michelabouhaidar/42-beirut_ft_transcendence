@@ -11,7 +11,7 @@ import { formatDate, formatRelative } from "../lib/format";
 export function AdminUserDetailPage({ userId }: { userId: string }) {
   const { navigate } = useApp();
   const [user, setUser] = useState<AdminUserDetail | null>(null);
-  const [error, setError] = useState<{ status?: number; message: string } | null>(null);
+  const [error, setError] = useState<{ code?: string; message: string } | null>(null);
   const [actionRequest, setActionRequest] = useState<UserActionRequest | null>(null);
 
   const load = useCallback(async () => {
@@ -20,8 +20,8 @@ export function AdminUserDetailPage({ userId }: { userId: string }) {
       setUser(res.user);
       setError(null);
     } catch (err) {
-      const e = err as Error & { status?: number };
-      setError({ status: e.status, message: e.message });
+      const e = err as Error & { code?: string };
+      setError({ code: e.code, message: e.message });
     }
   }, [userId]);
 
@@ -30,7 +30,7 @@ export function AdminUserDetailPage({ userId }: { userId: string }) {
     load();
   }, [load]);
 
-  if (error?.status === 404) {
+  if (error?.code === "NOT_FOUND") {
     return (
       <ErrorPage
         code="404"
@@ -60,7 +60,7 @@ export function AdminUserDetailPage({ userId }: { userId: string }) {
           {/* Identity + actions */}
           <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-6 pb-6 mb-6 border-b border-zinc-200 dark:border-dark-border">
             <div className="flex items-start gap-4 min-w-0">
-              <Avatar size="xl" name={user.fullName} src={user.avatarPath || undefined} className={isDeleted ? "opacity-50" : ""} />
+              <Avatar size="xl" name={user.fullName} src={user.avatarPath || undefined} colorSeed={user.id} className={isDeleted ? "opacity-50" : ""} />
               <div className="min-w-0">
                 <h1 className="text-2xl font-bold tracking-tight text-zinc-950 dark:text-white break-words">
                   {user.fullName}

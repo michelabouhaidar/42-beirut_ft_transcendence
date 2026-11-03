@@ -35,7 +35,7 @@ export async function findProject(orgId: string, key: string) {
   const project = await prisma.project.findFirst({ where: { orgId, key, deletedAt: null } });
   if (project) return project;
   const deleted = await prisma.project.findFirst({ where: { orgId, key, deletedAt: { not: null } }, select: { id: true } });
-  if (deleted) throw new OrgError(404, "PROJECT_DELETED", "This project was deleted.");
+  if (deleted) throw new OrgError(410, "PROJECT_DELETED", "This project was deleted.");
   throw new OrgError(404, "NOT_FOUND", "Project not found.");
 }
 
@@ -205,7 +205,8 @@ export async function grantAccess(orgId: string, projectId: string, userId: stri
   }
 }
 
-// PRJ-04: revoking unassigns the user's tasks in this project.
+// PRJ-04: revoking unassigns the user's tasks in this project. The route then takes them out of the
+// project's live room (realtime/socket.ts).
 export async function revokeAccess(projectId: string, userId: string) {
   const now = new Date();
   let unassignedTasks = 0;

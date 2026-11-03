@@ -33,8 +33,7 @@ export function NotificationBell({ allPath }: NotificationBellProps) {
   const label = unreadCount ? `Notifications (${badgeCount(unreadCount)} unread)` : "Notifications";
 
   return (
-    // Not "relative" on phones: the panel then anchors to the (sticky) header and spans the screen
-    // instead of hanging off the bell and running past the left edge.
+    // Not "relative" on phones: the panel then anchors to the (sticky) header and spans the screen instead of hanging off the bell and running past the left edge.
     <div ref={containerRef} className="inline-flex sm:relative">
       <IconButton label={label} icon={<Bell className="w-4 h-4" />} aria-haspopup="dialog" aria-expanded={isOpen} onClick={() => setIsOpen((o) => !o)} />
       {unreadCount > 0 && (

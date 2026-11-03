@@ -101,7 +101,7 @@ export function ProjectPage({ projectKey, view: routeView, taskNumber }: Project
       load();
       setRefreshKey((k) => k + 1);
     },
-    !error || (error.status !== 404 && error.code !== "PROJECT_DELETED")
+    !error || (error.code !== "NOT_FOUND" && error.code !== "PROJECT_DELETED")
   );
 
   const replaceTask = (task: Task) => setTasks((ts) => (ts ?? []).map((t) => (t.id === task.id ? task : t)));
@@ -113,10 +113,10 @@ export function ProjectPage({ projectKey, view: routeView, taskNumber }: Project
   const people = useMemo(() => toPickerPeople(assignees), [assignees]);
   const friendIds = useMemo(() => new Set(assignees.filter((a) => a.isFriend).map((a) => a.id)), [assignees]);
 
-  // A version conflict (409) means someone else changed the task first; either way the board reloads.
+  // A version conflict means someone else changed the task first; either way the board reloads.
   const failed = (err: unknown, what: string) => {
     const e = err as TaskApiError;
-    if (e.status === 409) toast.warning("This task was just changed by someone else", "The board has been refreshed.");
+    if (e.code === "VERSION_CONFLICT") toast.warning("This task was just changed by someone else", "The board has been refreshed.");
     else toast.error(what, e.message);
     load();
   };
@@ -171,7 +171,7 @@ export function ProjectPage({ projectKey, view: routeView, taskNumber }: Project
     );
   }
 
-  if (error?.status === 404) {
+  if (error?.code === "NOT_FOUND") {
     return (
       <ErrorPage
         code="404"

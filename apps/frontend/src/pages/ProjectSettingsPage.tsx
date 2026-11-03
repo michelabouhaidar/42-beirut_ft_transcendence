@@ -77,12 +77,12 @@ export function ProjectSettingsPage({ projectKey }: { projectKey: string }) {
     }
   };
 
-  if (error?.code === "PROJECT_DELETED" || error?.status === 404 || error?.status === 403) {
+  if (error?.code === "PROJECT_DELETED" || error?.code === "NOT_FOUND" || error?.code === "FORBIDDEN") {
     return (
       <ErrorPage
-        code={error.status === 403 ? "403" : "404"}
-        title={error.code === "PROJECT_DELETED" ? "This project was deleted" : error.status === 403 ? "403 — Forbidden" : "Project not found"}
-        message={error.status === 403 ? "Only Org Admins can change project settings." : error.message}
+        code={error.code === "FORBIDDEN" ? "403" : "404"}
+        title={error.code === "PROJECT_DELETED" ? "This project was deleted" : error.code === "FORBIDDEN" ? "403 — Forbidden" : "Project not found"}
+        message={error.code === "FORBIDDEN" ? "Only Org Admins can change project settings." : error.message}
         home="/projects"
       />
     );

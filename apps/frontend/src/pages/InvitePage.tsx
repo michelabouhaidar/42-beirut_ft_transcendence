@@ -315,7 +315,7 @@ export function NewAccountForm({
     } catch (err) {
       const e = err as ApiError;
       if (e.code === "ACCOUNT_EXISTS") onAccountExists();
-      else if (e.status === 410) onDeadLink(e.code || "INVITATION_USED", e.message);
+      else if (e.code && e.code in DEAD_LINK) onDeadLink(e.code, e.message);
       else setError(e.message);
       setSubmitting(false);
     }

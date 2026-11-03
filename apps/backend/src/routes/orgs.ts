@@ -3,6 +3,7 @@ import { MembershipStatus, OrgRole } from "@prisma/client";
 import { prisma } from "../app";
 import { AuthContext, requireAuth } from "../services/auth";
 import { CreateOrgSchema } from "../schemas";
+import { isRefusal, refuse } from "../services/refusal";
 import {
   OrgError,
   changeMemberRole,
@@ -18,12 +19,13 @@ export const orgsRouter = Router();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function sendError(res: Response, err: unknown, fallback: string) {
+  if (err instanceof OrgError && isRefusal(err.status)) return refuse(res, err.code, err.message);
   if (err instanceof OrgError) return res.status(err.status).json({ error: { code: err.code, message: err.message } });
   console.error(`[Orgs] ${fallback}:`, err);
   return res.status(500).json({ error: { code: "INTERNAL_ERROR", message: fallback } });
 }
 
-const notFound = (res: Response) => res.status(404).json({ error: { code: "NOT_FOUND", message: "Organization not found." } });
+const notFound = (res: Response) => res.status(200).json({ ok: false, error: { code: "NOT_FOUND", message: "Organization not found." } });
 
 // OA manages their own org; SA manages any. Anything else is out of scope -> 404 (§4.1).
 function canManage(auth: AuthContext, orgId: string): boolean {
@@ -65,7 +67,7 @@ orgsRouter.patch("/orgs/:id", async (req: Request, res: Response) => {
   if (!UUID_RE.test(req.params.id) || !canManage(auth, req.params.id)) return notFound(res);
   const parsed = CreateOrgSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({
+    return res.status(200).json({ ok: false,
       error: { code: "VALIDATION_ERROR", message: parsed.error.errors[0]?.message || "Invalid organization details." },
     });
   }
@@ -111,10 +113,10 @@ orgsRouter.patch("/orgs/:id/members/:userId", async (req: Request, res: Response
   if (!UUID_RE.test(req.params.id) || !UUID_RE.test(req.params.userId) || !canManage(auth, req.params.id)) return notFound(res);
   const role = typeof req.body?.role === "string" ? req.body.role.toUpperCase() : "";
   if (role !== "MEMBER" && role !== "VIEWER") {
-    return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Role must be Member or Viewer." } });
+    return res.status(200).json({ ok: false, error: { code: "VALIDATION_ERROR", message: "Role must be Member or Viewer." } });
   }
   if (req.params.userId === auth.user.id) {
-    return res.status(403).json({ error: { code: "FORBIDDEN", message: "You can't change your own role." } });
+    return res.status(200).json({ ok: false, error: { code: "FORBIDDEN", message: "You can't change your own role." } });
   }
   try {
     const { unassignedTasks } = await changeMemberRole(req.params.id, req.params.userId, role, auth.user.id);
@@ -130,7 +132,7 @@ orgsRouter.delete("/orgs/:id/members/:userId", async (req: Request, res: Respons
   if (!auth) return;
   if (!UUID_RE.test(req.params.id) || !UUID_RE.test(req.params.userId) || !canManage(auth, req.params.id)) return notFound(res);
   if (req.params.userId === auth.user.id) {
-    return res.status(400).json({ error: { code: "USE_LEAVE", message: "Use \"Leave organization\" to remove yourself." } });
+    return res.status(200).json({ ok: false, error: { code: "USE_LEAVE", message: "Use \"Leave organization\" to remove yourself." } });
   }
   try {
     if (auth.role === "OA") {
@@ -139,7 +141,7 @@ orgsRouter.delete("/orgs/:id/members/:userId", async (req: Request, res: Respons
         select: { role: true },
       });
       if (target?.role === OrgRole.OA) {
-        return res.status(403).json({ error: { code: "FORBIDDEN", message: "Only a System Admin can remove an Org Admin." } });
+        return res.status(200).json({ ok: false, error: { code: "FORBIDDEN", message: "Only a System Admin can remove an Org Admin." } });
       }
     }
     const { unassignedTasks } = await endMembership(req.params.id, req.params.userId, "removed", auth.user.id);

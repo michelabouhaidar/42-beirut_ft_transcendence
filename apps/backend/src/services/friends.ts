@@ -1,5 +1,6 @@
 import { Prisma, FriendshipStatus, MembershipStatus } from "@prisma/client";
 import { prisma } from "../app";
+import { emitToUser, isOnline } from "../realtime/socket";
 
 type Db = Prisma.TransactionClient | typeof prisma;
 
@@ -20,6 +21,12 @@ export async function endFriendshipsForUser(db: Db, userId: string): Promise<str
     data: { status: FriendshipStatus.REMOVED },
   });
   return rows.map((r) => (r.requesterId === userId ? r.addresseeId : r.requesterId));
+}
+
+// every change to a friendship (request, accept, decline, cancel, remove, or ended
+// because someone left) tells both people, so Friends, Members and profile pages refresh at once.
+export function emitFriendshipChange(userIds: string[], change: { friendshipId?: string; reason: string }): void {
+  for (const id of new Set(userIds)) emitToUser(id, "friendship:updated", change);
 }
 
 // Ids of the user's accepted friends.
@@ -65,8 +72,9 @@ export function friendshipStateFor(
   return "NONE";
 }
 
-// USR-06: live online status needs the realtime layer, so everyone reads as offline for now.
-// "Last seen" is the stored value, or else their latest session activity.
+// USR-06: online = at least one open socket (10 s grace on disconnect, see realtime/socket.ts).
+// "Last seen" is when the last socket closed; for someone who never connected since this was
+// built, their latest session activity stands in.
 export async function loadPresence(
   userIds: string[]
 ): Promise<Map<string, { status: "online" | "offline"; lastSeenAt: Date | null }>> {
@@ -84,7 +92,7 @@ export async function loadPresence(
   const lastActive = new Map(sessions.map((r) => [r.userId, r._max.lastActivityAt]));
   for (const id of userIds) {
     out.set(id, {
-      status: "offline",
+      status: isOnline(id) ? "online" : "offline",
       lastSeenAt: lastSeen.get(id) ?? lastActive.get(id) ?? null,
     });
   }

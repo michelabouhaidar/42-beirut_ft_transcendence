@@ -41,7 +41,7 @@ Trenno is a collaborative task-management web app. Teams work in **organizations
 
 Rules:
 - A non-SA user belongs to **0 or 1** org.
-- An org always has **at least one OA**; any action that would break this is refused (`409 LAST_ORG_ADMIN`).
+- An org always has **at least one OA**; any action that would break this is refused (`LAST_ORG_ADMIN`, see §7.6 Refusals).
 - Only the SA appoints or demotes an OA, except that the creator of an org becomes its first OA.
 - Resource outside the user's scope → **404**. Inside the scope but action not allowed → **403**.
 
@@ -61,17 +61,17 @@ Rules:
 | Change role Member ↔ Viewer, remove Member/Viewer | ✓ | org | ✗ | ✗ | ✗ |
 | Leave the org | - | ✓ (not last OA) | ✓ | ✓ | - |
 | Create / edit / delete project, grant/revoke access | ✓ | org | ✗ | ✗ | ✗ |
-| View project, board, tasks, comments; search | ✓ | org | proj | proj | ✗ |
-| Create / edit / move / assign task | ✓ | org | proj | ✗ | ✗ |
-| Delete task | ✓ | org | own | ✗ | ✗ |
-| Add comment / edit own comment | ✓ | org | proj | proj | ✗ |
-| Delete comment | ✓ | org | own | own | ✗ |
+| View project, board, tasks, comments; search | ✗ | org | proj | proj | ✗ |
+| Create / edit / move / assign task | ✗ | org | proj | ✗ | ✗ |
+| Delete task | ✗ | org | own | ✗ | ✗ |
+| Add comment / edit own comment | ✗ | org | proj | proj | ✗ |
+| Delete comment | ✗ | org | own | own | ✗ |
 
 ### 4.3 Different views per role (*Advanced permissions*)
 
 | Role | UI |
 |---|---|
-| SA | **Admin** menu: Users, Organizations. Can open any org. |
+| SA | **Admin** menu: Users, Organizations. Can open any org and manage its projects, but never sees its tasks or comments (data confidentiality). |
 | OA | **Organization** menu: Members, Invitations, Settings. "New project", project settings and access. |
 | M | Task create/edit, drag and drop. No org admin menu. |
 | V | Same pages as M in **read-only** mode (no create/edit/drag, "Read-only" badge). |
@@ -117,7 +117,7 @@ Rules:
 | **INV-01** | Invite by email. | OA: Member or Viewer into their org. SA: any role, any org. One pending invitation per (org, email). Inviting a current member is refused. The invitee receives an email with a single-use link valid 7 days. |
 | **INV-02** | Accept as a new person. | Link → setup page with org and role shown, email pre-filled read-only; enter names, password, accept Terms. Account created `ACTIVE` (email proven), membership created, user logged in. |
 | **INV-03** | Accept as an existing account. | Must be logged in as the invited email. Accept / Decline. If already in another org → "Leave <org> first". Pending invitations also appear on the Unaffiliated onboarding page. |
-| **INV-04** | Manage invitations. | OA/SA list: email, role, inviter, expiry, status. **Resend** (new token, old link dead) and **Revoke**. Expired, revoked or used links → clear error page (API `410`). |
+| **INV-04** | Manage invitations. | OA/SA list: email, role, inviter, expiry, status. **Resend** (new token, old link dead) and **Revoke**. Expired, revoked, used or replaced links → clear error page (API refusal with the link's state as `code`, §7.6). |
 
 ### 6.4 Profiles, friends, presence (USR) - *Standard user management*
 
@@ -146,7 +146,7 @@ Rules:
 
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
-| **ORG-01** | Create an org. | Unaffiliated user (becomes OA in the same transaction) or SA (then invites the first OA). Name 2–100 unique, description ≤ 1,000. A user who already belongs to an organization is refused (409); names are compared case-insensitively among live orgs. |
+| **ORG-01** | Create an org. | Unaffiliated user (becomes OA in the same transaction) or SA (then invites the first OA). Name 2–100 unique, description ≤ 1,000. A user who already belongs to an organization is refused (`ALREADY_IN_ORG`, §7.6); names are compared case-insensitively among live orgs. |
 | **ORG-02** | View orgs. | SA: admin list (name, members, projects, created) + detail. Others: overview of their org. |
 | **ORG-03** | Edit an org. | OA or SA. `PATCH /orgs/:id` (OA of that org, or SA); another org's OA or a Member gets 404. Settings page at `/org/settings`. |
 | **ORG-04** | Delete an org. | OA or SA; typed name. Soft-deletes the org and its projects, tasks, comments, access rows; revokes pending invitations; ends memberships and friendships between its members. Members become unaffiliated and receive an email. The name can be reused. `DELETE /orgs/:id` with `confirmName`; the dialog lists what happens before confirming. |
@@ -162,7 +162,7 @@ Rules:
 | **PRJ-02** | Project list. | OA: all org projects. M/V: projects with access. Each card: name, key, % Done, open and overdue counts. Overdue = not Done with a due date before today. `GET /projects` (SA: `?orgId=`); a project a user can't see is a 404. |
 | **PRJ-03** | Edit a project. | OA/SA. Key cannot change. `PATCH /projects/:key`; a different `key` is refused with `KEY_IMMUTABLE`. Settings page at `/projects/:key/settings`. |
 | **PRJ-04** | Project access. | OA grants/revokes access to Members/Viewers of the org. Revoking unassigns that user's tasks in the project and removes them from the project's live room. `GET/POST /projects/:key/access`, `DELETE /projects/:key/access/:userId`; Org Admins are listed as always having access; the revoke dialog shows how many tasks get unassigned. A revoked user's sockets leave `project:<id>` at once and get `me:updated`, so their open board refetches and shows the 404; any later request is refused too. |
-| **PRJ-05** | Delete a project. | OA/SA; typed key. Soft-deletes the project, tasks, comments, access rows. Open boards show "This project was deleted". Name/key reusable. `DELETE /projects/:key` with `confirmKey`; afterwards the key answers 404 `PROJECT_DELETED` to anyone who could see it. Open boards get `project:deleted` and show it at once; the project room is closed. |
+| **PRJ-05** | Delete a project. | OA/SA; typed key. Soft-deletes the project, tasks, comments, access rows. Open boards show "This project was deleted". Name/key reusable. `DELETE /projects/:key` with `confirmKey`; afterwards the key answers the refusal `PROJECT_DELETED` (§7.6) to anyone who could see it. Open boards get `project:deleted` and show it at once; the project room is closed. |
 
 ### 6.8 Tasks, board, comments (TSK) - *Organization system*
 
@@ -171,14 +171,14 @@ Rules:
 | **TSK-01** | Create a task. | Title 1–200, description ≤ 10,000 (plain text), status (default To Do), priority (default Medium), due date, assignee. Creator set automatically. Number `KEY-n` allocated atomically (§7.3), never reused. `POST /projects/:key/tasks`. Unknown fields are refused (400). Due date `YYYY-MM-DD`, 2000–2100. |
 | **TSK-02** | Values. | Status: **To Do, In Progress, Done** (Done sets `completed_at`, leaving Done clears it). Priority: **Low, Medium, High, Urgent**. Other values → 400. |
 | **TSK-03** | Assignee. | Zero or one. Must be an active OA or Member with access to the project. Assign/reassign/unassign; previous and new assignee notified. `GET /projects/:key/assignees` lists who can be assigned. A change creates one `task.assigned` notification for the creator, the new and the previous assignee (never the actor); the text depends on the reader ("assigned to you", "reassigned to …", "unassigned you"). |
-| **TSK-04** | Edit a task. | All fields from the detail panel. Version check (§7.2). `PATCH /projects/:key/tasks/:n` with `version`; a stale version gets `409 VERSION_CONFLICT` with the current task, and the panel shows it with a toast. |
+| **TSK-04** | Edit a task. | All fields from the detail panel. Version check (§7.2). `PATCH /projects/:key/tasks/:n` with `version`; a stale version gets the refusal `VERSION_CONFLICT` (§7.6) with the current task, and the panel shows it with a toast. |
 | **TSK-05** | Kanban board. | 3 columns with counts; cards show key, title, priority badge, due date (red if overdue), assignee avatar. Filters: text, assignee (incl. me/unassigned), priority. Horizontal scroll on small screens. `/projects/:key/board`. "+" on each column creates a task in it. |
 | **TSK-06** | Drag and drop. | dnd-kit, between and within columns; status and position saved. Each card also has a "Move to…" menu (keyboard alternative). Viewers cannot drag. `POST /projects/:key/tasks/:n/move` with `status`, `index` and `version`. The "Move to…" menu is the design system's `Menu` component. |
 | **TSK-07** | Live updates. | Create, edit, move, assign, delete and comments appear on other open boards/panels within 2 s without reload. The board joins `project:<id>` (`project:join`, access checked) and refetches when a `task:*`, `comment:*`, `member:updated` or `me:updated` event arrives (batched per 100 ms). A `task:updated` whose `version` the client already has is ignored; a typed-but-unsaved panel draft is kept. |
 | **TSK-08** | List view. | Sortable table of the project's tasks. `/projects/:key/list`: sort by key, title, status, priority, assignee, due, updated. |
 | **TSK-09** | Detail panel. | Opened from the board or by URL `/projects/:key/tasks/:n`. All fields, creator, dates, comments. Read-only for Viewers. Viewers see fields read-only but can comment (TSK-11). |
-| **TSK-10** | Delete a task. | OA/SA, or the Member who created it. Confirmation. Soft delete with its comments. `DELETE /projects/:key/tasks/:n`. |
-| **TSK-11** | Comments. | OA, Members **and Viewers** with access: add (1–5,000 chars), edit own ("edited"), delete own (OA/SA: any). Deleted comments show "This comment was deleted". Live for other viewers. `GET/POST /projects/:key/tasks/:n/comments`, `PATCH/DELETE /comments/:id`. |
+| **TSK-10** | Delete a task. | OA, or the Member who created it. Confirmation. Soft delete with its comments. `DELETE /projects/:key/tasks/:n`. |
+| **TSK-11** | Comments. | OA, Members **and Viewers** with access: add (1–5,000 chars), edit own ("edited"), delete own (OA: any). Deleted comments show "This comment was deleted". Live for other viewers. `GET/POST /projects/:key/tasks/:n/comments`, `PATCH/DELETE /comments/:id`. |
 
 ### 6.9 Notifications (NOTIF) - *Minor: complete notification system*
 
@@ -232,7 +232,7 @@ Rules:
 
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
-| **SRCH-01** | Scope-aware search. | Text matching (case-insensitive, partial) across task key, title, and description backed by `pg_trgm` GIN index. Never returns tasks outside user's authorized scope. Header search bar routes directly to `/search?q=`. `GET /search/tasks?q=` performs scoped matching; OA/SA search the whole org; Members/Viewers search only projects with access. |
+| **SRCH-01** | Scope-aware search. | Text matching (case-insensitive, partial) across task key, title, and description backed by `pg_trgm` GIN index. Never returns tasks outside user's authorized scope. Header search bar routes directly to `/search?q=`. `GET /search/tasks?q=` performs scoped matching; OA search the whole org; Members/Viewers search only projects with access. |
 | **SRCH-02** | Multi-attribute filters. | Filter by project, status, priority, assignee (`me`, `unassigned`, or user ID), and due date range (`dueFrom`, `dueTo`). Removable filter chips + "Clear all". Parameters accept comma-separated multi-values; invalid parameters return 400. Response provides available projects and assignees for quick filtering. |
 | **SRCH-03** | Sorting options. | Sort by updated date (default), created date, due date (empty dates placed last), priority, or title; direction `asc` or `desc`. Defaults: newest updated first, soonest due first, highest priority first, alphabetical title A→Z. |
 | **SRCH-04** | Pagination & URL sync. | 25 results per page with range indicator (e.g., "26–50 of 132"). Search query, applied filters, sort field, direction, and page number synchronize with URL query parameters for shareable URLs and functional browser history. |
@@ -260,7 +260,7 @@ Rules:
 | ID | Requirement | Acceptance criteria |
 |---|---|---|
 | **GEN-01** | Legal pages. | Publicly accessible `/privacy` and `/terms` linked in the global footer of every page, detailing stored user data, transactional emails, cookie usage, soft deletion policies, retention, and service usage terms. |
-| **GEN-02** | User feedback & errors. | Inline field validation errors; action toasts; 401 triggers login redirect; dedicated 403 Forbidden page; 404 Not Found page; 409 conflict notifications with automatic re-fetch; 429 rate limit banner ("Try again in N s"); 5xx generic error messages without exposing stack traces. |
+| **GEN-02** | User feedback & errors. | Inline field validation errors; action toasts; 401 triggers login redirect; dedicated 403 Forbidden page; 404 Not Found page; conflict notifications (`VERSION_CONFLICT` refusal) with automatic re-fetch; rate limit banner (`RATE_LIMITED` refusal) ("Try again in N s"); 5xx generic error messages without exposing stack traces. |
 | **GEN-03** | Action confirmations. | Confirmation dialogs on destructive actions; explicit typed string confirmation for deleting users, organizations, or projects. |
 | **GEN-04** | Connection banner. | When WebSocket connection drops, a "Reconnecting…" status banner appears; upon reconnect, current view state automatically refreshes. |
 | **GEN-05** | Demo seed. | `make seed-demo` script creates: 1 SA, 1 org, 1 OA, 2 Members, 1 Viewer, 2 projects, ~60 sample tasks spanning 60 days, comments, and established friendships. Default credentials documented in README. |
@@ -281,7 +281,7 @@ Rules:
 
 ### 7.2 Concurrency
 - Tasks maintain an integer `version` field. Update and move requests transmit the version; `UPDATE … WHERE id = ? AND version = ?` atomically increments the version.
-- If 0 rows match, the API returns `409 Conflict` alongside current task data; the UI alerts the user ("This task was just changed by <name>") and refreshes, snapping dragged cards back to actual state.
+- If 0 rows match, the API returns the `VERSION_CONFLICT` refusal (§7.6) alongside current task data; the UI alerts the user ("This task was just changed by <name>") and refreshes, snapping dragged cards back to actual state.
 - Card vertical ordering utilizes a floating-point `position` attribute; moving between cards assigns the midpoint between neighbors. The column is renumbered in a single transaction if positional gaps shrink below threshold.
 - Database invariants: unique active membership per user, unique friendship pair, unique project key, unique org name (using partial indexes). "At least one OA / SA" invariant validated inside transactions.
 - WebSocket events transmit `version` attributes; clients discard events older than their local state version.
@@ -318,12 +318,13 @@ Rules:
 | Task title / description | 1–200 / ≤ 10,000 chars |
 | Comment | 1–5,000 chars |
 | Dates | `YYYY-MM-DD`, valid dates between 2000 and 2100 |
-| Unknown body fields | rejected (HTTP 400 Bad Request) |
+| Unknown body fields | rejected (`VALIDATION_ERROR` refusal) |
+
+**Refusals and errors.** A valid request that the current state refuses is an answer, not an error: the API replies `200` with `{ "ok": false, "error": { "code", "message" } }`. This covers input the rules reject (`VALIDATION_ERROR` with the rule's message, e.g. the password policy, which the form then shows), wrong credentials, a locked, suspended or unverified account, a wrong 2FA code or current password, an expired 2FA step, a used, expired or replaced email link or invitation, a name or key already taken, a stale task version (`VERSION_CONFLICT`, with the current `task`), a deleted project (`PROJECT_DELETED`), an action another admin already took (`ALREADY_SUSPENDED`, …), last-admin rules, a rejected avatar file, rate limits, and something that is not (or no longer) there or allowed — access revoked, a task, comment, member, org or notification deleted, a stale link or bookmark (`NOT_FOUND`, `FORBIDDEN`; still a 404 page in the UI). Internally these are the 403/404/409/410/413/415/422/423/429 cases. Faults keep real status codes: `400` a body that isn't valid JSON, `401` no or expired session (it also signs the client out), `404` an API route that doesn't exist, `405` wrong method, `500` server error. `GET /auth/me` answers `200` with `user: null` when nobody is signed in. Result: the browser console stays clean in normal use; a red line always means a real fault.
 
 ### 7.7 Security
 - Passwords hashed with salted Argon2id.
 - Server-side session cookies: `HttpOnly; Secure; SameSite=Lax`.
-- CSRF defense: state-modifying requests must provide an `Origin` header matching `APP_URL`.
 - Multi-tier route authorization on every endpoint: Authentication → Organization scope → Project access → Role permissions.
 - Security headers enforced by nginx reverse proxy (HSTS, CSP, X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Referrer-Policy).
 - React automatic escaping utilized exclusively; no `dangerouslySetInnerHTML`.

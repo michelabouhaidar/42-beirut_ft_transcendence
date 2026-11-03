@@ -11,7 +11,7 @@ if ((rawSmtpFrom.startsWith('"') && rawSmtpFrom.endsWith('"')) || (rawSmtpFrom.s
 }
 const smtpFrom = rawSmtpFrom;
 const smtpSecure = process.env.SMTP_SECURE === "true" || smtpPort === 465;
-const appUrl = process.env.APP_URL || "https://localhost:8443";
+const appUrl = process.env.APP_URL;
 
 if (!smtpHost) {
   console.warn("[Mailer] SMTP_HOST is not set; emails will fail until SMTP_* is configured.");

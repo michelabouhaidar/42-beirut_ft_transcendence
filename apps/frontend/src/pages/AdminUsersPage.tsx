@@ -247,7 +247,7 @@ function UserRow({ user: u, onOpen, onAction }: { user: AdminUserListItem; onOpe
     <tr onClick={onOpen} className={`group cursor-pointer hover:bg-zinc-50 dark:hover:bg-dark-elevated transition-colors ${isDeleted ? "text-zinc-400 dark:text-zinc-500" : ""}`}>
       <td className="py-3 px-4">
         <div className="flex items-center gap-3 min-w-0">
-          <Avatar size="sm" name={u.fullName} src={u.avatarPath || undefined} className={isDeleted ? "opacity-50" : ""} />
+          <Avatar size="sm" name={u.fullName} src={u.avatarPath || undefined} colorSeed={u.id} className={isDeleted ? "opacity-50" : ""} />
           <div className="min-w-0">
             <button
               type="button"
