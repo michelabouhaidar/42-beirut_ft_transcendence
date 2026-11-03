@@ -11,8 +11,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - db-data:/var/lib/postgresql/data
-    ports:
-      - "${POSTGRES_HOST_PORT}:${POSTGRES_PORT}"
+    # ports:
+    #   - "${POSTGRES_HOST_PORT}:${POSTGRES_PORT}"
     networks:
       - app-network
     healthcheck:
