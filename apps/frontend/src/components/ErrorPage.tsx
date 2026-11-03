@@ -1,7 +1,7 @@
 import { AlertTriangle, ArrowLeft, Home, ShieldAlert } from "lucide-react";
 import { useApp } from "../context/AppContext";
 import { Button } from "./Button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "./Card";
+import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "./Card";
 
 interface ErrorPageProps {
   code: "403" | "404";
@@ -21,7 +21,7 @@ export function ErrorPage({ code, title, message, home }: ErrorPageProps) {
           <div className="mx-auto mb-4 h-12 w-12 flex items-center justify-center rounded-none bg-destructive-50 dark:bg-destructive-950/40 text-destructive-600 border border-destructive-200 dark:border-destructive-900/60">
             {is403 ? <ShieldAlert className="h-6 w-6" /> : <AlertTriangle className="h-6 w-6" />}
           </div>
-          <CardTitle className="text-xl sm:text-2xl font-bold font-sans">{title || (is403 ? "403 — Access Forbidden" : "404 — Page Not Found")}</CardTitle>
+          <CardTitle className="text-xl sm:text-2xl font-bold font-sans">{title || (is403 ? "Access forbidden" : "Page not found")}</CardTitle>
           <CardDescription className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-400 mt-2 font-sans">
             {message ||
               (is403
@@ -29,11 +29,6 @@ export function ErrorPage({ code, title, message, home }: ErrorPageProps) {
                 : "The page you are looking for does not exist or has been moved.")}
           </CardDescription>
         </CardHeader>
-        <CardContent className="pt-2 text-center">
-          <div className="p-3 bg-zinc-100 dark:bg-dark-card border border-zinc-200/80 dark:border-dark-border text-xs font-sans font-medium text-zinc-600 dark:text-zinc-400">
-            HTTP Status: {code} &bull; Access Restricted
-          </div>
-        </CardContent>
         <CardFooter className="flex flex-col sm:flex-row gap-2 pt-4">
           <Button variant="outline" fullWidth onClick={() => window.history.back()} leftIcon={<ArrowLeft className="w-4 h-4" />}>
             Go Back

@@ -81,7 +81,7 @@ export function ProjectSettingsPage({ projectKey }: { projectKey: string }) {
     return (
       <ErrorPage
         code={error.code === "FORBIDDEN" ? "403" : "404"}
-        title={error.code === "PROJECT_DELETED" ? "This project was deleted" : error.code === "FORBIDDEN" ? "403 — Forbidden" : "Project not found"}
+        title={error.code === "PROJECT_DELETED" ? "This project was deleted" : error.code === "FORBIDDEN" ? "Forbidden" : "Project not found"}
         message={error.code === "FORBIDDEN" ? "Only Org Admins can change project settings." : error.message}
         home="/projects"
       />

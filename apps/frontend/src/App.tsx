@@ -80,7 +80,7 @@ function MainApp() {
   }
 
   const isLanding = path === "/" || path in AUTH_VIEWS;
-  if (!isLanding) return <ErrorPage code="404" title="404 — Page Not Found" message="The page you are looking for does not exist." home={user ? home : "/"} />;
+  if (!isLanding) return <ErrorPage code="404" title="Page not found" message="The page you are looking for does not exist." home={user ? home : "/"} />;
 
   let authView: AuthPopupView | null = !isLoading && !user ? AUTH_VIEWS[path] ?? null : null;
   if ((authView === "verify" || authView === "reset-password") && !queryParam("token")) authView = null;
@@ -103,7 +103,7 @@ function MainApp() {
 
 // Signed-in routes and role checks. undefined = not one of these pages.
 function userPage(path: string, role: string | null, isSA: boolean, home: string) {
-  const forbidden = (message: string, to: string, title = "403 — Forbidden") => <ErrorPage code="403" title={title} message={message} home={to} />;
+  const forbidden = (message: string, to: string, title = "Forbidden") => <ErrorPage code="403" title={title} message={message} home={to} />;
 
   // Platform administration (System Admins only).
   if (path.startsWith("/admin")) {
@@ -123,7 +123,7 @@ function userPage(path: string, role: string | null, isSA: boolean, home: string
         </AppLayout>
       );
     }
-    return <ErrorPage code="404" title="404 — Admin Resource Not Found" message="The requested administrative page does not exist." home="/admin/users" />;
+    return <ErrorPage code="404" title="Admin resource not found" message="The requested administrative page does not exist." home="/admin/users" />;
   }
 
   // System Admins are redirected to /admin/users by the guard.
@@ -140,7 +140,7 @@ function userPage(path: string, role: string | null, isSA: boolean, home: string
     return forbidden(
       "You are currently unaffiliated. Please create an organization or accept an invitation to access projects and organization menus.",
       "/onboarding",
-      "403 — Workspace Required"
+      "Workspace required"
     );
   }
 
