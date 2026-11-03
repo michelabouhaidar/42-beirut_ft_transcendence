@@ -36,7 +36,6 @@ services:
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY}
       SEED_SA_EMAIL: ${SEED_SA_EMAIL}
       SEED_SA_PASSWORD: ${SEED_SA_PASSWORD}
-      BACKUP_MAX_AGE_HOURS: ${BACKUP_MAX_AGE_HOURS}
       SMTP_HOST: ${SMTP_HOST}
       SMTP_PORT: ${SMTP_PORT}
       SMTP_USER: ${SMTP_USER}
@@ -45,7 +44,6 @@ services:
       SMTP_SECURE: ${SMTP_SECURE}
     volumes:
       - uploads-data:/app/uploads
-      - ${BACKUP_DIR}/status:/backup-status:ro
     networks:
       - app-network
     depends_on:
@@ -137,12 +135,10 @@ services:
       - "--path.sysfs=/host/sys"
       - "--path.rootfs=/rootfs"
       - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
-      - "--collector.textfile.directory=/backup-status"
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/rootfs:ro
-      - ${BACKUP_DIR}/status:/backup-status:ro
     networks:
       - app-network
     healthcheck:
@@ -174,40 +170,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-
-  backup:
-    build:
-      context: ./backup
-      dockerfile: Dockerfile
-    container_name: ${CONTAINER_NAME_BACKUP}
-    restart: unless-stopped
-    environment:
-      TZ: ${BACKUP_TZ}
-      BACKUP_SCHEDULE: ${BACKUP_SCHEDULE}
-      BACKUP_KEEP: ${BACKUP_KEEP}
-      BACKUP_MAX_AGE_HOURS: ${BACKUP_MAX_AGE_HOURS}
-      BACKUP_UID: ${BACKUP_UID}
-      PGHOST: ${POSTGRES_HOST}
-      PGPORT: ${POSTGRES_PORT}
-      PGUSER: ${POSTGRES_USER}
-      PGPASSWORD: ${POSTGRES_PASSWORD}
-      PGDATABASE: ${POSTGRES_DB}
-    volumes:
-      - ${BACKUP_DIR}:/backups
-      - uploads-data:/sources/uploads
-      - grafana-data:/sources/grafana
-      - certs-data:/sources/certs
-      - ./.env:/sources/env:ro
-    networks:
-      - app-network
-    depends_on:
-      db:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
-      interval: 1m
-      timeout: 10s
-      start_period: 2m
 
   nginx:
     build:

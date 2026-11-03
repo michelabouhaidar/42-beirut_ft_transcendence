@@ -1,26 +1,4 @@
 groups:
-  - name: trenno_backups
-    rules:
-      - alert: BackupFailed
-        expr: trenno_backup_last_run_success == 0
-        for: 5m
-        labels:
-          severity: critical
-          service: backup
-        annotations:
-          summary: "The last Trenno backup failed"
-          description: "Check `make logs-backup`, fix the cause, then run `make backup`."
-
-      - alert: BackupTooOld
-        expr: time() - trenno_backup_last_success_timestamp_seconds > 26 * 3600
-        for: 10m
-        labels:
-          severity: critical
-          service: backup
-        annotations:
-          summary: "No successful Trenno backup in the last 26 hours"
-          description: "The daily backup has not succeeded. Data written since then is not protected."
-
   - name: trenno_alerts
     rules:
       # Service Availability Alert
